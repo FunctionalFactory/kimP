@@ -20,10 +20,17 @@ export class StrategyHighService {
     binancePrice: number,
     rate: number,
     cycleId?: string,
+    actualInvestmentUSDT?: number,
   ) {
-    const totalUSDT = 10;
-    const halfUSDT = totalUSDT / 2;
-    const buyAmount = binancePrice !== 0 ? halfUSDT / binancePrice : 0;
+    const investmentUSDTForCalc = actualInvestmentUSDT ?? 10;
+    if (actualInvestmentUSDT === undefined) {
+      this.logger.warn(
+        `[STRATEGY1] actualInvestmentUSDT is undefined, using fallback: ${investmentUSDTForCalc} USDT`,
+      );
+    }
+
+    const buyAmount =
+      binancePrice !== 0 ? investmentUSDTForCalc / binancePrice : 0;
 
     const result = this.feeCalculatorService.calculate({
       symbol,
@@ -39,7 +46,7 @@ export class StrategyHighService {
     );
     this.logger.log(` - 환율: ${rate}`);
     this.logger.log(
-      ` - 바이낸스 매수가: $${halfUSDT} → ${buyAmount.toFixed(4)} ${symbol.toUpperCase()}`,
+      ` - 바이낸스 매수가: $${investmentUSDTForCalc} → ${buyAmount.toFixed(4)} ${symbol.toUpperCase()}`,
     );
     this.logger.log(
       ` - 예상 수익: ${result.netProfit.toFixed(0)}₩ (${result.netProfitPercent.toFixed(2)}%)`,

@@ -62,9 +62,9 @@ export class SpreadCalculatorService {
     // );
 
     if (result.netProfitPercent > profitThresholdPercent) {
-      this.logger.warn(
-        `🚨 [${symbol.toUpperCase()}] 순이익률 ${result.netProfitPercent.toFixed(2)}% → 차익거래 조건 만족!`,
-      );
+      // this.logger.warn(
+      //   `🚨 [${symbol.toUpperCase()}] 순이익률 ${result.netProfitPercent.toFixed(2)}% → 차익거래 조건 만족!`,
+      // );
 
       await onArbitrageConditionMet({
         symbol,

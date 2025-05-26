@@ -21,10 +21,16 @@ export class StrategyLowService {
     binancePrice: number,
     rate: number,
     cycleId?: string,
+    investmentKRW?: number,
   ) {
-    const totalKRW = 13000;
-    const halfKRW = totalKRW / 2;
-    const buyAmount = upbitPrice !== 0 ? halfKRW / upbitPrice : 0;
+    const actualInvestmentKRW =
+      investmentKRW && investmentKRW > 0 ? investmentKRW : 10_000_000;
+
+    this.logger.log(
+      `[STRATEGY_LOW] Received for cycle ${cycleId}: symbol=${symbol}, upbitPrice=${upbitPrice}, binancePrice=${binancePrice}, rate=${rate}, investmentKRW=${actualInvestmentKRW}`,
+    );
+
+    const buyAmount = upbitPrice !== 0 ? actualInvestmentKRW / upbitPrice : 0;
 
     const result = this.feeCalculatorService.calculate({
       symbol,
@@ -36,47 +42,77 @@ export class StrategyLowService {
     });
 
     this.logger.log(
-      `🔄 [STRATEGY2] 저프리미엄 → ${symbol.toUpperCase()} 시뮬레이션`,
-    );
-    this.logger.log(` - 환율: ${rate}`);
-    this.logger.log(
-      ` - 업비트 매수가: ₩${halfKRW} → ${buyAmount.toFixed(4)} ${symbol.toUpperCase()}`,
-    );
-    this.logger.log(
-      ` - 예상 수익: ${result.netProfit.toFixed(0)}₩ (${result.netProfitPercent.toFixed(2)}%)`,
-    );
+      `[STRATEGY_LOW] Fee calculation result for ${symbol} (cycle ${cycleId}): ${JSON.stringify(result)}`,
+    ); // 상세 로깅 추가
 
     if (cycleId) {
       try {
         const existingCycle =
           await this.arbitrageRecordService.getArbitrageCycle(cycleId);
         if (existingCycle) {
-          const totalNetProfitKrw =
-            (existingCycle.highPremiumNetProfitKrw ?? 0) + result.netProfit;
-          const totalNetProfitUsd = totalNetProfitKrw / rate;
-          const totalNetProfitPercent =
-            (totalNetProfitKrw / (existingCycle.initialInvestmentKrw ?? 1)) *
-            100;
+          // --- 숫자형 변환 및 NaN 방어 강화 ---
+          const highPremiumProfit = Number(
+            existingCycle.highPremiumNetProfitKrw ?? 0,
+          );
+          const lowPremiumProfit = Number(result.netProfit ?? 0); // result.netProfit도 혹시 모르니 Number로 감싸기
 
-          await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
+          // highPremiumProfit 또는 lowPremiumProfit이 NaN일 경우 0으로 처리
+          const validHighPremiumProfit = isNaN(highPremiumProfit)
+            ? 0
+            : highPremiumProfit;
+          const validLowPremiumProfit = isNaN(lowPremiumProfit)
+            ? 0
+            : lowPremiumProfit;
+
+          const calculatedTotalNetProfitKrw =
+            validHighPremiumProfit + validLowPremiumProfit;
+
+          const initialCycleInvestment = Number(
+            existingCycle.initialInvestmentKrw ?? 1,
+          );
+          const validInitialCycleInvestment = isNaN(initialCycleInvestment)
+            ? 1
+            : initialCycleInvestment;
+
+          const currentRate = Number(
+            rate && !isNaN(rate)
+              ? rate
+              : (existingCycle.highPremiumInitialRate ?? 1300),
+          );
+          const validRate =
+            isNaN(currentRate) || currentRate === 0 ? 1300 : currentRate; // 0으로 나누는 것 방지
+
+          const calculatedTotalNetProfitUsd =
+            calculatedTotalNetProfitKrw / validRate;
+          const calculatedTotalNetProfitPercent =
+            (calculatedTotalNetProfitKrw / validInitialCycleInvestment) * 100;
+
+          const updateData = {
             lowPremiumSymbol: symbol,
             lowPremiumUpbitBuyPriceKrw: upbitPrice,
             lowPremiumBuyAmount: buyAmount,
             lowPremiumSpreadPercent:
-              ((binancePrice * rate - upbitPrice) / upbitPrice) * 100,
+              ((binancePrice * validRate - upbitPrice) / upbitPrice) * 100,
             lowPremiumShortEntryFeeKrw: result.binanceFuturesEntryFeeKrw,
             lowPremiumBinanceSellPriceUsd: binancePrice,
             lowPremiumTransferFeeKrw: result.transferCoinToBinanceFeeKrw,
             lowPremiumSellFeeKrw: result.binanceSpotSellFeeKrw,
             lowPremiumShortExitFeeKrw: result.binanceFuturesExitFeeKrw,
-            lowPremiumNetProfitKrw: result.netProfit,
-            lowPremiumNetProfitUsd: result.netProfit / rate,
+            lowPremiumNetProfitKrw: validLowPremiumProfit, // NaN이 아닌 값으로 저장
+            lowPremiumNetProfitUsd: validLowPremiumProfit / validRate, // NaN이 아닌 값으로 저장
             endTime: new Date(),
-            totalNetProfitKrw: totalNetProfitKrw,
-            totalNetProfitUsd: totalNetProfitUsd,
-            totalNetProfitPercent: totalNetProfitPercent,
+            totalNetProfitKrw: calculatedTotalNetProfitKrw, // NaN이 아닌 값으로 저장
+            totalNetProfitUsd: calculatedTotalNetProfitUsd, // NaN이 아닌 값으로 저장
+            totalNetProfitPercent: calculatedTotalNetProfitPercent, // NaN이 아닌 값으로 저장
             status: 'COMPLETED',
-          });
+          };
+          this.logger.log(
+            `[STRATEGY_LOW] Updating cycle ${cycleId} with data: ${JSON.stringify(updateData)}`,
+          );
+          await this.arbitrageRecordService.updateArbitrageCycle(
+            cycleId,
+            updateData,
+          );
           this.logger.log(
             `✅ [DB 저장] 저프리미엄 사이클 ${cycleId} 업데이트 및 플로우 완료.`,
           );

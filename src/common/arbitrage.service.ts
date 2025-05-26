@@ -30,6 +30,7 @@ export class ArbitrageService {
   async simulateArbitrage(
     data: ArbitrageSimulationData,
     cycleId: string, // <-- cycleId 인자 추가
+    actualInvestmentUSDT: number, // WsService로부터 받을 실제 투자금 (USD)
     onSimulationComplete?: () => Promise<void>,
   ) {
     const {
@@ -63,6 +64,7 @@ export class ArbitrageService {
       binancePrice,
       rate,
       cycleId, // <-- cycleId 전달
+      actualInvestmentUSDT, // 실제 투자금 전달
     );
     this.logger.log(
       `[SIMULATE] 고프리미엄 매매 및 전송 시뮬레이션 완료. DB 업데이트됨.`,

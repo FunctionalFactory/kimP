@@ -95,13 +95,15 @@ export class FeeCalculatorService {
     const netProfitPercent =
       initialInvestmentKRW !== 0 ? (netProfit / initialInvestmentKRW) * 100 : 0;
 
-    return {
+    const result = {
       grossProfit,
       totalFee: fees.total,
       netProfit,
       netProfitPercent,
       ...fees, // 계산된 모든 세부 수수료 항목을 반환 결과에 포함
     };
+
+    return result;
   }
 
   // 고프리미엄 시나리오 (바이낸스 매수 -> 업비트 매도) 수수료 추정
@@ -145,7 +147,7 @@ export class FeeCalculatorService {
       transferCoinToUpbitFeeKrw +
       usdtTransferFeeKrw;
 
-    return {
+    const feeDetails = {
       total,
       binanceSpotBuyFeeKrw,
       upbitSellFeeKrw,
@@ -154,6 +156,8 @@ export class FeeCalculatorService {
       transferCoinToUpbitFeeKrw,
       usdtTransferFeeKrw,
     };
+
+    return feeDetails;
   }
 
   // 저프리미엄 (업비트 매수 -> 바이낸스 판매) 수수료
@@ -195,7 +199,7 @@ export class FeeCalculatorService {
       binanceFuturesExitFeeKrw +
       transferCoinToBinanceFeeKrw;
 
-    return {
+    const feeDetails = {
       total,
       upbitBuyFeeKrw,
       binanceSpotSellFeeKrw,
@@ -203,5 +207,7 @@ export class FeeCalculatorService {
       binanceFuturesExitFeeKrw,
       transferCoinToBinanceFeeKrw,
     };
+
+    return feeDetails;
   }
 }
