@@ -4,6 +4,7 @@ import { WsModule } from './ws/ws.module';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ArbitrageCycle } from './db/entities/arbitrage-cycle.entity';
+import { PortfolioLog } from './db/entities/portfolio-log.entity';
 
 @Module({
   imports: [
@@ -18,7 +19,7 @@ import { ArbitrageCycle } from './db/entities/arbitrage-cycle.entity';
       username: process.env.DB_USERNAME,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
-      entities: [ArbitrageCycle],
+      entities: [ArbitrageCycle, PortfolioLog],
       synchronize: true,
     }),
     WsModule,

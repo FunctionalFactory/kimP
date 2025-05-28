@@ -5,6 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 // 엔티티
 import { ArbitrageCycle } from '../db/entities/arbitrage-cycle.entity';
+import { PortfolioLog } from '../db/entities/portfolio-log.entity';
 
 // 서비스
 import { ExchangeService } from '../common/exchange.service';
@@ -20,7 +21,7 @@ import { CycleProfitCalculatorService } from '../common/cycle-profit-calculator.
 import { ArbitrageRecordService } from '../db/arbitrage-record.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ArbitrageCycle])],
+  imports: [TypeOrmModule.forFeature([ArbitrageCycle, PortfolioLog])],
   providers: [
     WsService,
     ExchangeService,
