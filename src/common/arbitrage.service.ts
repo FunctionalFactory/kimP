@@ -10,8 +10,8 @@ interface ArbitrageSimulationData {
   upbitPrice: number;
   binancePrice: number;
   rate: number;
-  netProfit: number;
-  netProfitPercent: number;
+  netProfit?: number;
+  netProfitPercent?: number;
 }
 
 @Injectable()

@@ -21,7 +21,7 @@ export class StrategyHighService {
     rate: number,
     cycleId?: string,
     actualInvestmentUSDT?: number,
-  ) {
+  ): Promise<{ netProfitKrw: number; totalFeeKrw: number } | void> {
     const investmentUSDTForCalc = actualInvestmentUSDT ?? 10;
     if (actualInvestmentUSDT === undefined) {
       this.logger.warn(
@@ -62,6 +62,7 @@ export class StrategyHighService {
           highPremiumShortExitFeeKrw: result.binanceFuturesExitFeeKrw,
           highPremiumNetProfitKrw: result.netProfit,
           highPremiumNetProfitUsd: result.netProfit / rate,
+          //highPremiumTotalFeeKrw: result.totalFee, // DB에 필드 추가 시
           highPremiumCompletedAt: new Date(),
           status: 'HIGH_PREMIUM_COMPLETED',
         });
