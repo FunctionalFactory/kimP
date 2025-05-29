@@ -5,6 +5,9 @@ import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ArbitrageCycle } from './db/entities/arbitrage-cycle.entity';
 import { PortfolioLog } from './db/entities/portfolio-log.entity';
+import { MarketDataModule } from './marketdata/marketdata.module';
+import { ArbitrageModule } from './arbitrage/arbitrage.module';
+import { NotificationModule } from './notification/notification.module';
 
 @Module({
   imports: [
@@ -23,6 +26,9 @@ import { PortfolioLog } from './db/entities/portfolio-log.entity';
       synchronize: true,
     }),
     WsModule,
+    MarketDataModule,
+    ArbitrageModule,
+    NotificationModule,
   ],
 })
 export class AppModule {}

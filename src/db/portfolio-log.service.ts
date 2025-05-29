@@ -3,7 +3,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PortfolioLog } from './entities/portfolio-log.entity';
-import { ArbitrageCycle } from './entities/arbitrage-cycle.entity'; // ArbitrageCycle 타입 임포트
 
 @Injectable()
 export class PortfolioLogService {
@@ -14,11 +13,15 @@ export class PortfolioLogService {
     private readonly portfolioLogRepository: Repository<PortfolioLog>,
   ) {}
 
-  /**
-   * 새로운 포트폴리오 로그를 생성합니다.
-   * @param data PortfolioLog 생성에 필요한 데이터
-   * @returns 저장된 PortfolioLog 객체
-   */
+  // WsService에서 가져온 parseAndValidateNumber 함수 또는 유사한 기능
+  private parseToNumber(value: any): number | null {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    const num = Number(value); // 또는 parseFloat(value)
+    return isNaN(num) ? null : num;
+  }
+
   async createLog(data: {
     timestamp: Date;
     upbit_balance_krw: number;
@@ -26,8 +29,8 @@ export class PortfolioLogService {
     total_balance_krw: number;
     cycle_pnl_krw: number;
     cycle_pnl_rate_percent: number;
-    linked_arbitrage_cycle_id?: string | null; // Nullable로 변경
-    remarks?: string | null; // Nullable로 변경
+    linked_arbitrage_cycle_id?: string | null;
+    remarks?: string | null;
   }): Promise<PortfolioLog> {
     try {
       const newLogData: Partial<PortfolioLog> = {
@@ -40,18 +43,19 @@ export class PortfolioLogService {
         remarks: data.remarks,
       };
 
-      // linked_arbitrage_cycle_id가 제공된 경우에만 관계 설정 시도
       if (data.linked_arbitrage_cycle_id) {
         newLogData.linked_arbitrage_cycle_id = data.linked_arbitrage_cycle_id;
-        // 만약 ArbitrageCycle 엔티티 객체 자체를 연결하려면 아래와 같이 할 수 있으나,
-        // ID만 저장하는 것이 더 간단할 수 있습니다.
-        // newLogData.linked_arbitrage_cycle = { id: data.linked_arbitrage_cycle_id } as ArbitrageCycle;
       }
 
       const newLog = this.portfolioLogRepository.create(newLogData);
       const savedLog = await this.portfolioLogRepository.save(newLog);
+
+      // 🌶️ 로깅 전 숫자 변환
+      const totalBalanceForLog = this.parseToNumber(savedLog.total_balance_krw);
+      const cyclePnlForLog = this.parseToNumber(savedLog.cycle_pnl_krw);
+
       this.logger.log(
-        `새 포트폴리오 로그 생성됨: ID ${savedLog.id}, 총 잔고 ${savedLog.total_balance_krw.toFixed(0)} KRW, 직전 사이클 PNL: ${savedLog.cycle_pnl_krw.toFixed(0)} KRW`,
+        `새 포트폴리오 로그 생성됨: ID ${savedLog.id}, 총 잔고 ${totalBalanceForLog !== null ? totalBalanceForLog.toFixed(0) : 'N/A'} KRW, 직전 사이클 PNL: ${cyclePnlForLog !== null ? cyclePnlForLog.toFixed(0) : 'N/A'} KRW`,
       );
       return savedLog;
     } catch (error) {
@@ -63,18 +67,23 @@ export class PortfolioLogService {
     }
   }
 
-  /**
-   * 가장 최근의 포트폴리오 로그를 조회합니다.
-   * @returns 가장 최근의 PortfolioLog 객체 또는 null
-   */
   async getLatestPortfolio(): Promise<PortfolioLog | null> {
     try {
-      const latestLog = await this.portfolioLogRepository.findOne({
-        order: { timestamp: 'DESC' }, // 가장 최근 timestamp 기준
+      const logs = await this.portfolioLogRepository.find({
+        order: { timestamp: 'DESC' },
+        take: 1,
       });
+
+      const latestLog = logs.length > 0 ? logs[0] : null;
+
       if (latestLog) {
+        // 🌶️ 로깅 전 숫자 변환
+        const totalBalanceForLog = this.parseToNumber(
+          latestLog.total_balance_krw,
+        );
+
         this.logger.verbose(
-          `가장 최근 포트폴리오 로그 조회됨: ID ${latestLog.id}, 총 잔고 ${latestLog.total_balance_krw.toFixed(0)} KRW (Timestamp: ${latestLog.timestamp.toISOString()})`,
+          `가장 최근 포트폴리오 로그 조회됨: ID ${latestLog.id}, 총 잔고 ${totalBalanceForLog !== null ? totalBalanceForLog.toFixed(0) : 'N/A'} KRW (Timestamp: ${latestLog.timestamp.toISOString()})`,
         );
       } else {
         this.logger.warn(
@@ -90,12 +99,4 @@ export class PortfolioLogService {
       throw error;
     }
   }
-
-  // 추가적으로 필요할 수 있는 메소드 (예시)
-  // async getPortfolioHistory(limit: number = 100): Promise<PortfolioLog[]> {
-  //   return this.portfolioLogRepository.find({
-  //     order: { timestamp: 'DESC' },
-  //     take: limit,
-  //   });
-  // }
 }

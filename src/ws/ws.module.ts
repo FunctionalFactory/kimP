@@ -1,41 +1,21 @@
 // src/ws/ws.module.ts
 import { Module } from '@nestjs/common';
 import { WsService } from './ws.service';
-import { TypeOrmModule } from '@nestjs/typeorm';
-
-// 엔티티
-import { ArbitrageCycle } from '../db/entities/arbitrage-cycle.entity';
-import { PortfolioLog } from '../db/entities/portfolio-log.entity';
-
-// 서비스
-import { ExchangeService } from '../common/exchange.service';
-import { FeeCalculatorService } from '../common/fee-calculator.service';
-import { TelegramService } from '../common/telegram.service';
-import { StrategyHighService } from '../common/strategy-high.service';
-import { StrategyLowService } from '../common/strategy-low.service';
-import { ArbitrageDetectorService } from '../common/arbitrage-detector.service';
-import { ProfitCalculatorService } from '../common/profit-calculator.service';
-import { SpreadCalculatorService } from '../common/spread-calculator.service';
-import { ArbitrageService } from '../common/arbitrage.service';
-import { CycleProfitCalculatorService } from '../common/cycle-profit-calculator.service';
-import { ArbitrageRecordService } from '../db/arbitrage-record.service';
+import { MarketDataModule } from '../marketdata/marketdata.module'; // PriceFeedService 제공
+import { ArbitrageModule } from '../arbitrage/arbitrage.module'; // ArbitrageFlowManagerService 제공
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ArbitrageCycle, PortfolioLog])],
+  imports: [
+    MarketDataModule, // PriceFeedService를 WsService에 주입하기 위해
+    ArbitrageModule, // ArbitrageFlowManagerService를 WsService에 주입하기 위해
+  ],
   providers: [
     WsService,
-    ExchangeService,
-    FeeCalculatorService,
-    TelegramService,
-    CycleProfitCalculatorService,
-    StrategyHighService,
-    StrategyLowService,
-    ArbitrageDetectorService,
-    ProfitCalculatorService,
-    SpreadCalculatorService,
-    ArbitrageService,
-    ArbitrageRecordService,
+    // WsService가 더 이상 직접 사용하지 않는 서비스들은 여기서 제거
   ],
+  // WsService가 onModuleInit을 통해 자체적으로 동작을 시작하므로,
+  // AppModule 등에서 직접 WsService를 호출할 필요가 없다면 exports는 불필요할 수 있습니다.
+  // 하지만 명시적으로 export 해두는 것도 좋습니다.
   exports: [WsService],
 })
 export class WsModule {}
