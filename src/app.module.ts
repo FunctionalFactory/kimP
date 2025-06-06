@@ -8,6 +8,10 @@ import { PortfolioLog } from './db/entities/portfolio-log.entity';
 import { MarketDataModule } from './marketdata/marketdata.module';
 import { ArbitrageModule } from './arbitrage/arbitrage.module';
 import { NotificationModule } from './notification/notification.module';
+import { UpbitModule } from './upbit/upbit.module';
+import { BinanceModule } from './binance/binance.module';
+import { AppController } from './app.controller'; // ⭐️ AppController import 확인
+import { AppService } from './app.service'; // ⭐️ AppService import 확인
 
 @Module({
   imports: [
@@ -29,6 +33,10 @@ import { NotificationModule } from './notification/notification.module';
     MarketDataModule,
     ArbitrageModule,
     NotificationModule,
+    UpbitModule,
+    BinanceModule,
   ],
+  controllers: [AppController], // ⭐️ AppController가 등록되어 있는지 확인
+  providers: [AppService], // ⭐️ AppService가 등록되어 있는지 확인
 })
 export class AppModule {}

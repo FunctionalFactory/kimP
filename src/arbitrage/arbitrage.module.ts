@@ -18,6 +18,11 @@ import { StrategyLowService } from '../common/strategy-low.service';
 import { FeeCalculatorService } from '../common/fee-calculator.service';
 import { ExchangeService } from '../common/exchange.service';
 
+// ========================= [수정 부분 시작] =========================
+import { UpbitModule } from '../upbit/upbit.module';
+import { BinanceModule } from '../binance/binance.module';
+// ========================== [수정 부분 끝] ==========================
+
 import { PortfolioLogService } from '../db/portfolio-log.service';
 import { ArbitrageRecordService } from '../db/arbitrage-record.service';
 import { PortfolioLog } from '../db/entities/portfolio-log.entity';
@@ -29,6 +34,8 @@ import { StrategyHighService } from 'src/common/strategy-high.service';
     ConfigModule,
     MarketDataModule,
     NotificationModule,
+    UpbitModule,
+    BinanceModule,
     TypeOrmModule.forFeature([PortfolioLog, ArbitrageCycle]),
   ],
   providers: [
@@ -46,6 +53,7 @@ import { StrategyHighService } from 'src/common/strategy-high.service';
     StrategyLowService,
     FeeCalculatorService,
     ExchangeService,
+    FeeCalculatorService,
   ],
   exports: [
     ArbitrageFlowManagerService,
@@ -53,6 +61,7 @@ import { StrategyHighService } from 'src/common/strategy-high.service';
     HighPremiumProcessorService,
     LowPremiumProcessorService,
     CycleCompletionService,
+    ExchangeService,
   ],
 })
 export class ArbitrageModule {}

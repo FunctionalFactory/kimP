@@ -1,16 +1,23 @@
 // src/common/strategy-high.service.ts
 import { Injectable, Logger } from '@nestjs/common';
-import { FeeCalculatorService } from './fee-calculator.service';
-import { TelegramService } from './telegram.service';
 import { ArbitrageRecordService } from '../db/arbitrage-record.service';
+import { ExchangeService, ExchangeType } from './exchange.service';
+import { Order } from './exchange.interface';
+
+// 유틸리티 함수: 지정된 시간(ms)만큼 대기
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 @Injectable()
 export class StrategyHighService {
   private readonly logger = new Logger(StrategyHighService.name);
 
+  // 폴링 관련 설정 (나중에 .env로 옮기는 것을 추천)
+  private readonly POLLING_INTERVAL_MS = 3000; // 3초
+  private readonly ORDER_TIMEOUT_MS = 180000; // 3분
+  private readonly DEPOSIT_TIMEOUT_MS = 600000; // 10분
+
   constructor(
-    private readonly feeCalculatorService: FeeCalculatorService,
-    private readonly telegramService: TelegramService,
+    private readonly exchangeService: ExchangeService,
     private readonly arbitrageRecordService: ArbitrageRecordService,
   ) {}
 
@@ -19,87 +26,220 @@ export class StrategyHighService {
     upbitPrice: number,
     binancePrice: number,
     rate: number,
-    cycleId?: string,
-    actualInvestmentUSDT?: number,
-  ): Promise<{ netProfitKrw: number; totalFeeKrw: number } | void> {
-    const investmentUSDTForCalc = actualInvestmentUSDT ?? 10;
-    if (actualInvestmentUSDT === undefined) {
-      this.logger.warn(
-        `[STRATEGY1] actualInvestmentUSDT is undefined, using fallback: ${investmentUSDTForCalc} USDT`,
+    cycleId: string,
+    actualInvestmentUSDT: number,
+  ): Promise<void> {
+    this.logger.log(
+      `[STRATEGY_HIGH] Starting trade process for cycle ${cycleId}`,
+    );
+
+    try {
+      // 0. 사전 안전 점검
+      const binanceWalletStatus = await this.exchangeService.getWalletStatus(
+        'binance',
+        symbol,
       );
+      if (!binanceWalletStatus.canWithdraw) {
+        throw new Error(
+          `Binance wallet for ${symbol} has withdrawal disabled.`,
+        );
+      }
+      const upbitWalletStatus = await this.exchangeService.getWalletStatus(
+        'upbit',
+        symbol,
+      );
+      if (!upbitWalletStatus.canDeposit) {
+        throw new Error(`Upbit wallet for ${symbol} has deposit disabled.`);
+      }
+      this.logger.log(`[STRATEGY_HIGH] Wallet status check OK for ${symbol}`);
+
+      // 1. 바이낸스 매수
+      // TODO: getOrderBook으로 호가창 확인 후, 지정가(limit)로 주문 가격 결정
+      const buyAmount = actualInvestmentUSDT / binancePrice;
+      const buyOrder = await this.exchangeService.createOrder(
+        'binance',
+        symbol,
+        'limit',
+        'buy',
+        buyAmount,
+        binancePrice,
+      );
+
+      const filledBuyOrder = await this.pollOrderStatus(
+        cycleId,
+        'binance',
+        buyOrder.id,
+      );
+      await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
+        status: 'HP_BOUGHT',
+        highPremiumBuyTxId: filledBuyOrder.id,
+      });
+      this.logger.log(
+        `[STRATEGY_HIGH] Binance buy order for ${symbol} filled.`,
+      );
+
+      // 2. 업비트로 출금
+      const { address: upbitAddress, tag: upbitTag } =
+        await this.exchangeService.getDepositAddress('upbit', symbol);
+      // 실제 체결된 수량으로 출금 요청
+      const withdrawalResult = await this.exchangeService.withdraw(
+        'binance',
+        symbol,
+        upbitAddress,
+        filledBuyOrder.filledAmount,
+        upbitTag,
+      );
+      await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
+        status: 'HP_WITHDRAWN',
+        highPremiumWithdrawTxId: withdrawalResult.id,
+      });
+      this.logger.log(
+        `[STRATEGY_HIGH] Withdrawal from Binance to Upbit initiated.`,
+      );
+
+      // 3. 업비트 입금 확인
+      await this.pollDepositConfirmation(
+        cycleId,
+        'upbit',
+        symbol,
+        filledBuyOrder.filledAmount,
+      );
+      await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
+        status: 'HP_DEPOSITED',
+      });
+      this.logger.log(`[STRATEGY_HIGH] Deposit to Upbit confirmed.`);
+
+      // 4. 업비트 매도
+      const sellOrder = await this.exchangeService.createOrder(
+        'upbit',
+        symbol,
+        'limit',
+        'sell',
+        filledBuyOrder.filledAmount,
+        upbitPrice,
+      );
+      const filledSellOrder = await this.pollOrderStatus(
+        cycleId,
+        'upbit',
+        sellOrder.id,
+      );
+
+      // 5. 최종 손익 계산 및 DB 업데이트
+      const krwProceeds =
+        filledSellOrder.filledAmount * filledSellOrder.price -
+        (filledSellOrder.fee.cost || 0);
+      const initialInvestmentKrw =
+        filledBuyOrder.filledAmount * filledBuyOrder.price * rate +
+        (filledBuyOrder.fee.cost || 0) * rate;
+      const finalProfitKrw = krwProceeds - initialInvestmentKrw; // TODO: 전송 수수료 추가 계산 필요
+
+      await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
+        status: 'HP_SOLD',
+        highPremiumNetProfitKrw: finalProfitKrw,
+        highPremiumUpbitSellPriceKrw: filledSellOrder.price, // 실제 체결가로 업데이트
+        highPremiumBinanceBuyPriceUsd: filledBuyOrder.price, // 실제 체결가로 업데이트
+        highPremiumCompletedAt: new Date(),
+      });
+      this.logger.log(
+        `[STRATEGY_HIGH] Upbit sell order for ${symbol} filled. High premium leg completed.`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `[STRATEGY_HIGH] CRITICAL ERROR during cycle ${cycleId}: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
+        status: 'FAILED',
+        errorDetails: `High Premium Leg Failed: ${(error as Error).message}`,
+      });
     }
+  }
 
-    const buyAmount =
-      binancePrice !== 0 ? investmentUSDTForCalc / binancePrice : 0;
-
-    // FeeCalculatorService는 슬리피지를 시뮬레이션하여 더 현실적인 예상 손익을 계산
-    const result = this.feeCalculatorService.calculate({
-      symbol,
-      amount: buyAmount,
-      upbitPrice,
-      binancePrice,
-      rate,
-      tradeDirection: 'HIGH_PREMIUM_SELL_UPBIT',
-    });
-
+  /**
+   * 주문이 체결될 때까지 주기적으로 상태를 확인합니다.
+   */
+  private async pollOrderStatus(
+    cycleId: string,
+    exchange: ExchangeType,
+    orderId: string,
+  ): Promise<Order> {
+    const startTime = Date.now();
     this.logger.log(
-      `🚀 [STRATEGY1] 고프리미엄 → ${symbol.toUpperCase()} 시뮬레이션`,
-    );
-    this.logger.log(` - 환율: ${rate}`);
-    this.logger.log(
-      ` - 바이낸스 매수가: $${investmentUSDTForCalc} → ${buyAmount.toFixed(4)} ${symbol.toUpperCase()}`,
-    );
-    this.logger.log(
-      ` - 예상 수익: ${result.netProfit.toFixed(0)}₩ (${result.netProfitPercent.toFixed(2)}%)`,
+      `[POLLING] Start polling for order ${orderId} on ${exchange}. Timeout: ${this.ORDER_TIMEOUT_MS}ms`,
     );
 
-    if (cycleId) {
+    while (Date.now() - startTime < this.ORDER_TIMEOUT_MS) {
       try {
-        // 시뮬레이션된 단계별 상태 업데이트
-        this.logger.log(`[SIMULATE_HP] ${cycleId} - 바이낸스 매수 완료`);
-        await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
-          status: 'HP_BOUGHT',
-        });
-
-        this.logger.log(
-          `[SIMULATE_HP] ${cycleId} - 업비트로 전송 시작 (1분 대기)`,
+        const order = await this.exchangeService.getOrder(exchange, orderId);
+        if (order.status === 'filled') {
+          this.logger.log(`[POLLING] Order ${orderId} filled.`);
+          return order;
+        }
+        if (order.status === 'canceled') {
+          throw new Error(`Order ${orderId} was canceled.`);
+        }
+        // 미체결 상태면 잠시 대기 후 다시 시도
+        await delay(this.POLLING_INTERVAL_MS);
+      } catch (e) {
+        this.logger.warn(
+          `[POLLING] Error while polling order ${orderId}: ${e.message}. Retrying...`,
         );
-        await new Promise((resolve) => setTimeout(resolve, 60000));
-        await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
-          status: 'HP_WITHDRAWN',
-        });
-
-        this.logger.log(`[SIMULATE_HP] ${cycleId} - 업비트 입금 완료`);
-        await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
-          status: 'HP_DEPOSITED',
-        });
-
-        this.logger.log(
-          `[SIMULATE_HP] ${cycleId} - 업비트 매도 완료. 고프리미엄 단계 종료.`,
-        );
-        await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
-          highPremiumUpbitSellPriceKrw: upbitPrice,
-          highPremiumTransferFeeKrw: result.transferCoinToUpbitFeeKrw,
-          highPremiumSellFeeKrw: result.upbitSellFeeKrw,
-          highPremiumNetProfitKrw: result.netProfit,
-          highPremiumNetProfitUsd: result.netProfit / rate,
-          highPremiumCompletedAt: new Date(),
-          // [수정된 부분] 'HIGH_PREMIUM_COMPLETED' 대신 'HP_SOLD' 사용
-          status: 'HP_SOLD',
-        });
-
-        this.logger.log(
-          `✅ [DB 저장] 고프리미엄 사이클 ${cycleId} 업데이트 완료. 최종 상태: HP_SOLD`,
-        );
-      } catch (error) {
-        this.logger.error(
-          `❌ [DB 오류] 고프리미엄 사이클 ${cycleId} 업데이트 실패: ${(error as Error).message}`,
-        );
-        await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
-          status: 'FAILED',
-          errorDetails: `고프리미엄 완료 DB 업데이트 실패: ${(error as Error).message}`,
-        });
+        await delay(this.POLLING_INTERVAL_MS);
       }
     }
+    throw new Error(
+      `Polling for order ${orderId} timed out after ${this.ORDER_TIMEOUT_MS}ms.`,
+    );
+  }
+
+  /**
+   * 입금이 완료될 때까지 주기적으로 잔고를 확인합니다.
+   */
+  private async pollDepositConfirmation(
+    cycleId: string,
+    exchange: ExchangeType,
+    symbol: string,
+    expectedAmount: number,
+  ): Promise<void> {
+    const startTime = Date.now();
+    this.logger.log(
+      `[POLLING] Start polling for deposit of ${expectedAmount} ${symbol} on ${exchange}. Timeout: ${this.DEPOSIT_TIMEOUT_MS}ms`,
+    );
+
+    // 1. 입금 확인 전 현재 잔고 조회
+    const initialBalances = await this.exchangeService.getBalances(exchange);
+    const initialBalance =
+      initialBalances.find(
+        (b) => b.currency.toUpperCase() === symbol.toUpperCase(),
+      )?.available || 0;
+
+    // 2. 잔고가 증가할 때까지 대기
+    while (Date.now() - startTime < this.DEPOSIT_TIMEOUT_MS) {
+      try {
+        const currentBalances =
+          await this.exchangeService.getBalances(exchange);
+        const currentBalance =
+          currentBalances.find(
+            (b) => b.currency.toUpperCase() === symbol.toUpperCase(),
+          )?.available || 0;
+
+        // 출금 수수료 등을 감안하여, 예상 수량의 99.9% 이상만 들어오면 성공으로 간주
+        if (currentBalance >= initialBalance + expectedAmount * 0.999) {
+          this.logger.log(
+            `[POLLING] Deposit of ${symbol} confirmed. New balance: ${currentBalance}`,
+          );
+          return;
+        }
+        await delay(this.POLLING_INTERVAL_MS * 5); // 입금 확인은 더 긴 간격으로 폴링
+      } catch (e) {
+        this.logger.warn(
+          `[POLLING] Error while polling deposit for ${symbol}: ${e.message}. Retrying...`,
+        );
+        await delay(this.POLLING_INTERVAL_MS * 5);
+      }
+    }
+    throw new Error(
+      `Polling for deposit of ${symbol} timed out after ${this.DEPOSIT_TIMEOUT_MS}ms.`,
+    );
   }
 }

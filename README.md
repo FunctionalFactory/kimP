@@ -112,3 +112,9 @@ npm run build
 # 프로덕션 모드로 실행
 npm run start:prod
 ```
+
+## 테스트 코드
+
+### 잔고조회 (업비트)
+
+http://localhost:3000/test-upbit-balance
