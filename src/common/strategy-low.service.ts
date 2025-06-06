@@ -111,7 +111,7 @@ export class StrategyLowService {
           );
           await this.arbitrageRecordService.updateArbitrageCycle(
             cycleId,
-            updateData,
+            updateData as Partial<ArbitrageCycle>,
           );
           this.logger.log(
             `✅ [DB 저장] 저프리미엄 사이클 ${cycleId} 업데이트 및 플로우 완료.`,

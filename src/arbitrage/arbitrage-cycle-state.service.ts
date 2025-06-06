@@ -1,10 +1,12 @@
 // src/arbitrage/arbitrage-cycle-state.service.ts
 import { Injectable, Logger } from '@nestjs/common';
 import { PortfolioLog } from '../db/entities/portfolio-log.entity'; // PortfolioLog 타입 임포트
+import { HighPremiumConditionData } from './high-premium-processor.service';
 
 // WsService에서 가져온 CycleExecutionStatus enum
 export enum CycleExecutionStatus {
   IDLE,
+  DECISION_WINDOW_ACTIVE,
   HIGH_PREMIUM_PROCESSING,
   AWAITING_LOW_PREMIUM,
   LOW_PREMIUM_PROCESSING,
@@ -21,6 +23,8 @@ export class ArbitrageCycleStateService {
   private _highPremiumInitialRateForActiveCycle: number | null = null;
   private _lowPremiumSearchStartTime: number | null = null;
   private _latestPortfolioLogAtCycleStart: PortfolioLog | null = null;
+  private _bestOpportunityCandidate: HighPremiumConditionData | null = null;
+  private _decisionTimer: NodeJS.Timeout | null = null;
 
   // Getters
   get currentCycleExecutionStatus(): CycleExecutionStatus {
@@ -40,6 +44,41 @@ export class ArbitrageCycleStateService {
   }
   get latestPortfolioLogAtCycleStart(): PortfolioLog | null {
     return this._latestPortfolioLogAtCycleStart;
+  }
+
+  public getBestOpportunity(): HighPremiumConditionData | null {
+    return this._bestOpportunityCandidate;
+  }
+  public setBestOpportunity(opportunity: HighPremiumConditionData): void {
+    this._bestOpportunityCandidate = opportunity;
+    this.logger.log(
+      `[DECISION] New best opportunity: ${opportunity.symbol.toUpperCase()} (${opportunity.netProfitPercent.toFixed(2)}%)`,
+    );
+  }
+
+  public startDecisionWindow(onComplete: () => void, delayMs: number): void {
+    if (this._decisionTimer) return; // 이미 타이머가 활성화되어 있으면 중복 실행 방지
+
+    this.logger.log(`[DECISION] Starting ${delayMs}ms decision window.`);
+    this._currentCycleExecutionStatus =
+      CycleExecutionStatus.DECISION_WINDOW_ACTIVE;
+
+    this._decisionTimer = setTimeout(() => {
+      this.logger.log(
+        '[DECISION] Decision window closed. Executing best opportunity.',
+      );
+      onComplete(); // 타이머 종료 후 콜백 함수 실행
+      this.clearDecisionWindow(); // 상태 정리
+    }, delayMs);
+  }
+
+  public clearDecisionWindow(): void {
+    if (this._decisionTimer) {
+      clearTimeout(this._decisionTimer);
+      this._decisionTimer = null;
+    }
+    this._bestOpportunityCandidate = null;
+    // 상태를 IDLE로 되돌리는 것은 FlowManager가 최종 결정
   }
 
   // Setters / State Transition Methods
@@ -102,6 +141,7 @@ export class ArbitrageCycleStateService {
     this.logger.log(
       `Resetting cycle state. Previous Cycle ID: ${this._activeCycleId || 'N/A'}`,
     );
+    this.clearDecisionWindow();
     this._currentCycleExecutionStatus = CycleExecutionStatus.IDLE;
     this._activeCycleId = null;
     this._requiredLowPremiumNetProfitKrwForActiveCycle = null;

@@ -17,7 +17,7 @@ export class ArbitrageRecordService {
     data: Partial<ArbitrageCycle>,
   ): Promise<ArbitrageCycle> {
     const newCycle = this.arbitrageCycleRepository.create(data);
-    newCycle.status = 'IN_PROGRESS'; // 초기 상태
+    newCycle.status = 'STARTED'; // 초기 상태
     const savedCycle = await this.arbitrageCycleRepository.save(newCycle);
     this.logger.log(`새로운 차익거래 사이클 시작: ${savedCycle.id}`);
     return savedCycle;

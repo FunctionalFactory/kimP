@@ -1,4 +1,3 @@
-// src/arbitrage/high-premium-processor.service.ts
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -10,17 +9,14 @@ import { ArbitrageRecordService } from '../db/arbitrage-record.service';
 import { ArbitrageService } from '../common/arbitrage.service';
 import { ArbitrageCycle } from '../db/entities/arbitrage-cycle.entity';
 import { PortfolioLog } from '../db/entities/portfolio-log.entity';
-// import { LowPremiumProcessorService } from './low-premium-processor.service'; // 순환 의존성 주의, 이벤트 방식 또는 FlowManager 경유
-// import { CycleCompletionService } from './cycle-completion.service.ts'; // 순환 의존성 주의
 
-// SpreadCalculatorService의 onArbitrageConditionMet 콜백에서 전달되는 데이터 타입
 export interface HighPremiumConditionData {
   symbol: string;
   upbitPrice: number;
   binancePrice: number;
   rate: number;
-  netProfit: number; // 예상 순이익 (수수료 고려)
-  netProfitPercent: number; // 예상 순이익률
+  netProfit: number;
+  netProfitPercent: number;
 }
 
 @Injectable()
@@ -35,9 +31,7 @@ export class HighPremiumProcessorService {
     private readonly cycleStateService: ArbitrageCycleStateService,
     private readonly portfolioLogService: PortfolioLogService,
     private readonly arbitrageRecordService: ArbitrageRecordService,
-    private readonly arbitrageService: ArbitrageService, // 고프리미엄 거래 시뮬레이션용
-    // private readonly lowPremiumProcessorService: LowPremiumProcessorService, // 직접 호출 대신 FlowManager 경유 또는 이벤트 사용
-    // private readonly cycleCompletionService: CycleCompletionService, // 직접 호출 대신 FlowManager 경유 또는 이벤트 사용
+    private readonly arbitrageService: ArbitrageService,
   ) {
     this.TARGET_OVERALL_CYCLE_PROFIT_PERCENT =
       this.configService.get<number>('TARGET_OVERALL_CYCLE_PROFIT_PERCENT') ||
@@ -54,8 +48,6 @@ export class HighPremiumProcessorService {
 
   public async processHighPremiumOpportunity(
     data: HighPremiumConditionData,
-    // cycleCompletionService: CycleCompletionService, // 메서드 인자로 전달하거나, 이벤트를 통해 호출
-    // lowPremiumProcessorService: LowPremiumProcessorService // 메서드 인자로 전달하거나, 이벤트를 통해 호출
   ): Promise<{
     success: boolean;
     nextStep?: 'awaitLowPremium' | 'failed';
@@ -117,7 +109,7 @@ export class HighPremiumProcessorService {
             ((data.upbitPrice - data.binancePrice * highPremiumInitialRate) /
               (data.binancePrice * highPremiumInitialRate)) *
             100,
-          status: 'IN_PROGRESS',
+          // status는 createArbitrageCycle 내부에서 'STARTED'로 설정되므로 여기서 제거
         });
 
       this.cycleStateService.startHighPremiumProcessing(
@@ -135,13 +127,9 @@ export class HighPremiumProcessorService {
       );
       await new Promise((resolve) => setTimeout(resolve, randomSeconds * 1000));
 
+      // [수정된 부분] 새로운 객체를 만드는 대신, 필요한 모든 정보가 담긴 'data'를 그대로 전달합니다.
       await this.arbitrageService.simulateArbitrage(
-        {
-          symbol: data.symbol,
-          upbitPrice: data.upbitPrice,
-          binancePrice: data.binancePrice,
-          rate: highPremiumInitialRate,
-        },
+        data,
         this.cycleStateService.activeCycleId!,
         highPremiumInvestmentUSDT,
       );
@@ -156,10 +144,10 @@ export class HighPremiumProcessorService {
         );
       if (
         !highPremiumCompletedCycle ||
-        highPremiumCompletedCycle.status !== 'HIGH_PREMIUM_COMPLETED'
+        highPremiumCompletedCycle.status !== 'HP_SOLD'
       ) {
         throw new Error(
-          `고프리미엄 단계 (${this.cycleStateService.activeCycleId})가 DB에서 HIGH_PREMIUM_COMPLETED 상태로 확인되지 않았습니다. Status: ${highPremiumCompletedCycle?.status}`,
+          `고프리미엄 단계 (${this.cycleStateService.activeCycleId})가 DB에서 HP_SOLD 상태로 확인되지 않았습니다. Status: ${highPremiumCompletedCycle?.status}`,
         );
       }
 
@@ -180,6 +168,11 @@ export class HighPremiumProcessorService {
         100;
       const requiredLowPremiumProfit =
         overallTargetProfitKrw - actualHighPremiumNetProfitKrw;
+
+      await this.arbitrageRecordService.updateArbitrageCycle(
+        this.cycleStateService.activeCycleId!,
+        { status: 'AWAITING_LP' },
+      );
 
       this.cycleStateService.completeHighPremiumAndAwaitLowPremium(
         requiredLowPremiumProfit,
@@ -208,12 +201,8 @@ export class HighPremiumProcessorService {
           errorDetails: `고프리미엄 처리 중 예외: ${(error as Error).message}`,
           endTime: new Date(),
         });
-        // 실패 시 후처리는 CycleCompletionService에 위임 (FlowManager가 호출)
-        // const failedCycleData = await this.arbitrageRecordService.getArbitrageCycle(cycleIdToLog);
-        // await cycleCompletionService.completeCycle(cycleIdToLog, failedCycleData, this.cycleStateService.latestPortfolioLogAtCycleStart);
       }
-      // 상태 초기화는 CycleCompletionService에서 하거나, FlowManager가 최종적으로 수행
-      // this.cycleStateService.resetCycleState();
+
       return { success: false, nextStep: 'failed', cycleId: cycleIdToLog };
     }
   }

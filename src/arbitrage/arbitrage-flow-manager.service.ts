@@ -1,16 +1,12 @@
 // src/arbitrage/arbitrage-flow-manager.service.ts
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config'; // profitThresholdPercent만 여기서 사용
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   ArbitrageCycleStateService,
   CycleExecutionStatus,
 } from './arbitrage-cycle-state.service';
 import { PriceFeedService } from '../marketdata/price-feed.service';
 import { SpreadCalculatorService } from '../common/spread-calculator.service';
-// PortfolioLogService는 CycleCompletionService가 사용
-import { ArbitrageRecordService } from '../db/arbitrage-record.service'; // CycleCompletionService가 사용
-// ExchangeService는 각 Processor가 사용
-// ArbitrageCycle, PortfolioLog 엔티티 타입은 각 서비스에서 필요시 임포트
 import {
   HighPremiumProcessorService,
   HighPremiumConditionData,
@@ -19,80 +15,200 @@ import {
   LowPremiumProcessorService,
   LowPremiumResult,
 } from './low-premium-processor.service';
-// NotificationComposerService는 CycleCompletionService가 사용
 import { CycleCompletionService } from './cycle-completion.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { ArbitrageCycle } from '../db/entities/arbitrage-cycle.entity';
+import { In, Not, Repository } from 'typeorm';
+import { ArbitrageRecordService } from '../db/arbitrage-record.service';
 
 @Injectable()
-export class ArbitrageFlowManagerService {
+export class ArbitrageFlowManagerService implements OnModuleInit {
   private readonly logger = new Logger(ArbitrageFlowManagerService.name);
 
   private readonly profitThresholdPercent: number;
+  private readonly TARGET_OVERALL_CYCLE_PROFIT_PERCENT: number;
+  private readonly DECISION_WINDOW_MS = 2000; // 2초의 결정 시간
 
   constructor(
     private readonly configService: ConfigService,
     private readonly cycleStateService: ArbitrageCycleStateService,
     private readonly priceFeedService: PriceFeedService,
     private readonly spreadCalculatorService: SpreadCalculatorService,
-    // private readonly arbitrageRecordService: ArbitrageRecordService, // CycleCompletionService로 이동
     private readonly highPremiumProcessorService: HighPremiumProcessorService,
     private readonly lowPremiumProcessorService: LowPremiumProcessorService,
     private readonly cycleCompletionService: CycleCompletionService,
+    private readonly arbitrageRecordService: ArbitrageRecordService,
+    @InjectRepository(ArbitrageCycle)
+    private readonly arbitrageCycleRepository: Repository<ArbitrageCycle>,
   ) {
     this.profitThresholdPercent =
       this.configService.get<number>('PROFIT_THRESHOLD_PERCENT') || 0.7;
+    this.TARGET_OVERALL_CYCLE_PROFIT_PERCENT =
+      this.configService.get<number>('TARGET_OVERALL_CYCLE_PROFIT_PERCENT') ||
+      0.1;
   }
 
-  // parseAndValidateNumber는 각 서비스가 필요시 자체적으로 가짐
+  async onModuleInit() {
+    this.logger.log(
+      'Initializing Flow Manager, checking for incomplete cycles...',
+    );
+    const incompleteCycles = await this.arbitrageCycleRepository.find({
+      where: {
+        status: Not(
+          In([
+            'COMPLETED',
+            'FAILED',
+            'HIGH_PREMIUM_ONLY_COMPLETED_TARGET_MISSED',
+          ]),
+        ),
+      },
+    });
 
-  public async handlePriceUpdate(symbol: string): Promise<void> {
-    if (
-      this.cycleStateService.currentCycleExecutionStatus ===
-      CycleExecutionStatus.IDLE
-    ) {
-      const upbitPrice = this.priceFeedService.getUpbitPrice(symbol);
-      const binancePrice = this.priceFeedService.getBinancePrice(symbol);
+    if (incompleteCycles.length > 0) {
+      this.logger.warn(
+        `Found ${incompleteCycles.length} incomplete cycle(s). Attempting to recover...`,
+      );
+      for (const cycle of incompleteCycles) {
+        await this.recoverCycle(cycle);
+      }
+    }
+  }
 
-      if (upbitPrice === undefined || binancePrice === undefined) {
+  private async recoverCycle(cycle: ArbitrageCycle) {
+    this.logger.log(`Recovering cycle ${cycle.id} with status ${cycle.status}`);
+
+    // [수정된 부분] 복구 가능한 상태에서 'HIGH_PREMIUM_COMPLETED'를 제거
+    if (cycle.status === 'AWAITING_LP' || cycle.status === 'HP_SOLD') {
+      const initialInvestmentKrw = Number(cycle.initialInvestmentKrw);
+      const highPremiumNetProfitKrw = Number(cycle.highPremiumNetProfitKrw);
+      const initialRate = Number(cycle.highPremiumInitialRate);
+
+      if (
+        isNaN(initialInvestmentKrw) ||
+        isNaN(highPremiumNetProfitKrw) ||
+        isNaN(initialRate)
+      ) {
+        this.logger.error(
+          `[RECOVERY_FAIL] Cycle ${cycle.id} has invalid numeric data. Marking as FAILED.`,
+        );
+        await this.arbitrageRecordService.updateArbitrageCycle(cycle.id, {
+          status: 'FAILED',
+          errorDetails:
+            'Failed during recovery: cycle data contains invalid numbers.',
+        });
         return;
       }
 
-      await this.spreadCalculatorService.calculateSpread({
+      const overallTargetProfitKrw =
+        (initialInvestmentKrw * this.TARGET_OVERALL_CYCLE_PROFIT_PERCENT) / 100;
+      const requiredProfit = overallTargetProfitKrw - highPremiumNetProfitKrw;
+
+      this.cycleStateService.completeHighPremiumAndAwaitLowPremium(
+        requiredProfit,
+        initialRate,
+      );
+
+      // 'as any'를 사용하여 private 속성에 접근하는 대신, 상태 서비스에 public 메소드를 만드는 것이 더 좋지만,
+      // 현재 구조를 유지하기 위해 이 방법을 사용합니다.
+      (this.cycleStateService as any)._activeCycleId = cycle.id;
+
+      this.logger.log(
+        `✅ Cycle ${cycle.id} state recovered to AWAITING_LOW_PREMIUM. Required profit: ${requiredProfit.toFixed(0)} KRW.`,
+      );
+    } else {
+      this.logger.error(
+        `Cannot automatically recover cycle ${cycle.id} from status ${cycle.status}. Marking as FAILED.`,
+      );
+      await this.arbitrageRecordService.updateArbitrageCycle(cycle.id, {
+        status: 'FAILED',
+        errorDetails: `Failed during recovery process from unexpected state: ${cycle.status}`,
+      });
+    }
+  }
+
+  public async handlePriceUpdate(symbol: string): Promise<void> {
+    const currentState = this.cycleStateService.currentCycleExecutionStatus;
+
+    // IDLE 또는 DECISION_WINDOW_ACTIVE 상태일 때만 고프리미엄 기회 탐색
+    if (
+      currentState === CycleExecutionStatus.IDLE ||
+      currentState === CycleExecutionStatus.DECISION_WINDOW_ACTIVE
+    ) {
+      const upbitPrice = this.priceFeedService.getUpbitPrice(symbol);
+      const binancePrice = this.priceFeedService.getBinancePrice(symbol);
+      if (upbitPrice === undefined || binancePrice === undefined) return;
+
+      // 1. 순수익률 계산
+      const opportunity = await this.spreadCalculatorService.calculateSpread({
         symbol,
         upbitPrice,
         binancePrice,
         profitThresholdPercent: this.profitThresholdPercent,
-        onArbitrageConditionMet: async (data: HighPremiumConditionData) => {
-          const hpResult =
-            await this.highPremiumProcessorService.processHighPremiumOpportunity(
-              data,
-            );
-
-          if (
-            hpResult.success &&
-            hpResult.nextStep === 'awaitLowPremium' &&
-            hpResult.cycleId
-          ) {
-            this.logger.log(
-              `High premium processing successful (Cycle: ${hpResult.cycleId}). Triggering low premium processing.`,
-            );
-            await this.processLowPremium();
-          } else if (!hpResult.success && hpResult.cycleId) {
-            this.logger.error(
-              `High premium failed (Cycle: ${hpResult.cycleId}). Triggering completion.`,
-            );
-            await this.cycleCompletionService.completeCycle(hpResult.cycleId);
-          } else if (!hpResult.success && !hpResult.cycleId) {
-            this.logger.error(
-              'High premium processing failed before cycle ID generation or an unknown error occurred.',
-            );
-            // 이 경우엔 IDLE 상태이므로 resetCycleState() 불필요
-          }
-        },
       });
-    } else if (
-      this.cycleStateService.currentCycleExecutionStatus ===
-      CycleExecutionStatus.AWAITING_LOW_PREMIUM
-    ) {
+
+      // 2. 수익 기회가 있는 경우
+      if (opportunity) {
+        // 3. 이미 결정 시간이 활성화된 경우
+        if (currentState === CycleExecutionStatus.DECISION_WINDOW_ACTIVE) {
+          const currentBest = this.cycleStateService.getBestOpportunity();
+          // 새로 찾은 기회가 기존 최고 후보보다 좋으면 교체
+          if (
+            currentBest &&
+            opportunity.netProfitPercent > currentBest.netProfitPercent
+          ) {
+            this.cycleStateService.setBestOpportunity(opportunity);
+          }
+        }
+        // 4. IDLE 상태에서 처음으로 기회를 찾은 경우
+        else if (currentState === CycleExecutionStatus.IDLE) {
+          // 최고 후보로 설정하고 결정 시간 타이머 시작
+          this.cycleStateService.setBestOpportunity(opportunity);
+          this.cycleStateService.startDecisionWindow(async () => {
+            // 타이머 종료 후 실행될 로직
+            const finalOpportunity =
+              this.cycleStateService.getBestOpportunity();
+            if (!finalOpportunity) {
+              this.logger.error(
+                '[DECISION] Final opportunity was null. Resetting.',
+              );
+              this.cycleStateService.resetCycleState();
+              return;
+            }
+
+            // HighPremiumProcessor 호출
+            const hpResult =
+              await this.highPremiumProcessorService.processHighPremiumOpportunity(
+                finalOpportunity,
+              );
+
+            // 결과 처리
+            if (
+              hpResult.success &&
+              hpResult.nextStep === 'awaitLowPremium' &&
+              hpResult.cycleId
+            ) {
+              this.logger.log(
+                `High premium processing successful (Cycle: ${hpResult.cycleId}). Awaiting low premium processing.`,
+              );
+              // processLowPremium은 다음 가격 업데이트 시 자동으로 호출됨
+            } else if (!hpResult.success) {
+              this.logger.error(
+                `High premium failed after decision. Triggering completion if cycleId exists.`,
+              );
+              if (hpResult.cycleId) {
+                await this.cycleCompletionService.completeCycle(
+                  hpResult.cycleId,
+                );
+              } else {
+                this.cycleStateService.resetCycleState(); // Cycle ID도 없으면 그냥 리셋
+              }
+            }
+          }, this.DECISION_WINDOW_MS);
+        }
+      }
+    }
+    // 저프리미엄 탐색 로직은 그대로 유지
+    else if (currentState === CycleExecutionStatus.AWAITING_LOW_PREMIUM) {
       await this.processLowPremium();
     }
   }
@@ -102,9 +218,9 @@ export class ArbitrageFlowManagerService {
       this.cycleStateService.currentCycleExecutionStatus !==
       CycleExecutionStatus.AWAITING_LOW_PREMIUM
     ) {
-      this.logger.verbose(
-        `[FM_ProcessLowPremium] Not in AWAITING_LOW_PREMIUM state, skipping. Current: ${CycleExecutionStatus[this.cycleStateService.currentCycleExecutionStatus]}`,
-      );
+      // this.logger.verbose(
+      //   `[FM_ProcessLowPremium] Not in AWAITING_LOW_PREMIUM state, skipping. Current: ${CycleExecutionStatus[this.cycleStateService.currentCycleExecutionStatus]}`,
+      // );
       return;
     }
 
@@ -117,11 +233,9 @@ export class ArbitrageFlowManagerService {
       );
       await this.cycleCompletionService.completeCycle(result.cycleId);
     } else {
-      this.logger.verbose(
-        `[FM_ProcessLowPremium] LowPremiumProcessor did not yield an actionable result or cycleId this time.`,
-      );
-      // 기회가 없거나 조건 미충족으로 LPP가 null을 반환한 경우, FlowManager는 아무것도 하지 않고 다음 가격 업데이트를 기다림.
-      // 상태 리셋은 LPP가 타임아웃 등의 이유로 명시적인 실패 결과를 반환하고, 그 결과를 받아 completeCycle이 호출될 때 이루어짐.
+      // this.logger.verbose(
+      //   `[FM_ProcessLowPremium] LowPremiumProcessor did not yield an actionable result or cycleId this time.`,
+      // );
     }
   }
 }

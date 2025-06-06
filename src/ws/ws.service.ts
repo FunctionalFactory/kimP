@@ -15,6 +15,8 @@ import { ArbitrageFlowManagerService } from '../arbitrage/arbitrage-flow-manager
 @Injectable()
 export class WsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WsService.name);
+
+  private connectionStatusSubscription: Subscription | null = null;
   private priceUpdateSubscription: Subscription | null = null;
 
   constructor(
@@ -24,40 +26,65 @@ export class WsService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     this.logger.log(
-      'WsService Initialized. Subscribing to price updates from PriceFeedService.',
+      'WsService Initialized. Subscribing to connection status...',
     );
-    // PriceFeedService의 onModuleInit에서 웹소켓 연결이 시작됩니다.
-    // WsService는 PriceFeedService가 발행하는 가격 업데이트 이벤트를 구독합니다.
-    this.priceUpdateSubscription = this.priceFeedService.priceUpdate$.subscribe(
-      (priceData: PriceUpdateData) => {
-        // ArbitrageFlowManagerService.handlePriceUpdate 내부에서 양쪽 거래소 가격을 확인합니다.
-        // handlePriceUpdate는 비동기 함수이므로 await을 사용하거나, .then().catch()로 처리할 수 있습니다.
-        // 여기서는 백그라운드에서 실행되도록 하고, 오류는 handlePriceUpdate 내부에서 로깅되도록 합니다.
-        this.arbitrageFlowManagerService
-          .handlePriceUpdate(priceData.symbol)
-          .catch((error) => {
-            this.logger.error(
-              `Error during handlePriceUpdate for symbol ${priceData.symbol}: ${error.message}`,
-              error.stack,
+
+    // 1. PriceFeedService의 전체 연결 상태를 구독합니다.
+    this.connectionStatusSubscription =
+      this.priceFeedService.allConnectionsEstablished$.subscribe((isReady) => {
+        if (isReady) {
+          // 2. 모든 연결이 준비되면, 가격 업데이트 구독을 시작합니다.
+          // 이미 구독중이 아닐 때만 새로 구독합니다.
+          if (
+            !this.priceUpdateSubscription ||
+            this.priceUpdateSubscription.closed
+          ) {
+            this.logger.log(
+              'All connections are ready. Starting to listen for price updates.',
             );
-          });
-      },
-      (error) => {
-        this.logger.error(
-          'Error in price update subscription in WsService:',
-          error.message,
-          error.stack,
-        );
-        // 필요시 재구독 로직 또는 더 구체적인 오류 처리
-      },
-    );
+            this.priceUpdateSubscription =
+              this.priceFeedService.priceUpdate$.subscribe({
+                next: (priceData: PriceUpdateData) => {
+                  this.arbitrageFlowManagerService
+                    .handlePriceUpdate(priceData.symbol)
+                    .catch((error) => {
+                      this.logger.error(
+                        `Error during handlePriceUpdate for symbol ${priceData.symbol}: ${error.message}`,
+                        error.stack,
+                      );
+                    });
+                },
+                error: (error) => {
+                  this.logger.error(
+                    'Error in price update subscription:',
+                    error.message,
+                    error.stack,
+                  );
+                },
+              });
+          }
+        } else {
+          // 3. 연결이 하나라도 끊기면, 가격 업데이트 구독을 중단하여 로직 실행을 막습니다.
+          if (
+            this.priceUpdateSubscription &&
+            !this.priceUpdateSubscription.closed
+          ) {
+            this.logger.warn(
+              'Connections are not ready. Pausing price update listener.',
+            );
+            this.priceUpdateSubscription.unsubscribe();
+          }
+        }
+      });
   }
 
   onModuleDestroy() {
-    this.logger.log('WsService Destroyed. Unsubscribing from price updates.');
+    this.logger.log('WsService Destroyed. Unsubscribing from all updates.');
+    if (this.connectionStatusSubscription) {
+      this.connectionStatusSubscription.unsubscribe();
+    }
     if (this.priceUpdateSubscription) {
       this.priceUpdateSubscription.unsubscribe();
     }
-    // PriceFeedService의 onModuleDestroy에서 웹소켓 연결이 정리됩니다.
   }
 }

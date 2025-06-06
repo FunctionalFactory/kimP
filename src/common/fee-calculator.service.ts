@@ -50,11 +50,47 @@ export class FeeCalculatorService {
     icx: 0.01,
     qtum: 0.01,
     neo: 0.01,
+    btt: 0.01,
+    mana: 0.01,
+    grt: 0.01,
+    lsk: 0.01,
+    ardr: 0.01,
+    a: 0.01,
+    iq: 0.01,
   };
+
+  private _applySlippage(
+    price: number,
+    amount: number,
+    side: 'buy' | 'sell',
+  ): number {
+    // 매우 간단한 슬리피지 모델 예시: 거래량에 비례하여 0.05% ~ 0.15% 불리하게 조정
+    const slippageRate = Math.min(0.0015, 0.0005 + (amount / 100000) * 0.0001);
+
+    if (side === 'buy') {
+      // 매수 시에는 가격이 약간 오름
+      return price * (1 + slippageRate);
+    } else {
+      // 매도 시에는 가격이 약간 내림
+      return price * (1 - slippageRate);
+    }
+  }
 
   calculate(input: FeeInput): FeeResult {
     const { symbol, amount, upbitPrice, binancePrice, rate, tradeDirection } =
       input;
+
+    // 슬리피지가 적용된 유효 가격 계산
+    const effectiveUpbitPrice = this._applySlippage(
+      upbitPrice,
+      amount,
+      tradeDirection === 'HIGH_PREMIUM_SELL_UPBIT' ? 'sell' : 'buy',
+    );
+    const effectiveBinancePrice = this._applySlippage(
+      binancePrice,
+      amount,
+      tradeDirection === 'HIGH_PREMIUM_SELL_UPBIT' ? 'buy' : 'sell',
+    );
 
     let grossProfit: number;
     let initialInvestmentKRW: number;
@@ -64,8 +100,8 @@ export class FeeCalculatorService {
     > & { total: number };
 
     if (tradeDirection === 'HIGH_PREMIUM_SELL_UPBIT') {
-      const globalBuyPriceKRW = binancePrice * rate;
-      grossProfit = (upbitPrice - globalBuyPriceKRW) * amount;
+      const globalBuyPriceKRW = effectiveBinancePrice * rate;
+      grossProfit = (effectiveUpbitPrice - globalBuyPriceKRW) * amount;
       initialInvestmentKRW = globalBuyPriceKRW * amount;
 
       fees = this.estimateFeesForHighPremium(
@@ -76,8 +112,8 @@ export class FeeCalculatorService {
         rate,
       );
     } else if (tradeDirection === 'LOW_PREMIUM_SELL_BINANCE') {
-      const globalSellPriceKRW = binancePrice * rate;
-      grossProfit = (globalSellPriceKRW - upbitPrice) * amount;
+      const globalSellPriceKRW = effectiveBinancePrice * rate;
+      grossProfit = (globalSellPriceKRW - effectiveUpbitPrice) * amount;
       initialInvestmentKRW = upbitPrice * amount;
 
       fees = this.estimateFeesForLowPremium(

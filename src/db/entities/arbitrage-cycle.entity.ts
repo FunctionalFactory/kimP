@@ -7,6 +7,22 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
+// 모든 파일에서 공유할 수 있도록 상태 타입을 export 합니다.
+export type ArbitrageCycleStatus =
+  | 'STARTED' // 사이클 시작
+  | 'HP_BOUGHT' // 고프리미엄 코인 매수 완료
+  | 'HP_WITHDRAWN' // 고프리미엄 코인 출금 완료
+  | 'HP_DEPOSITED' // 고프리미엄 코인 입금 확인
+  | 'HP_SOLD' // 고프리미엄 코인 매도 완료
+  | 'AWAITING_LP' // 저프리미엄 기회 탐색 중
+  | 'LP_BOUGHT' // 저프리미엄 코인 매수 완료
+  | 'LP_WITHDRAWN' // 저프리미엄 코인 출금 완료
+  | 'LP_DEPOSITED' // 저프리미엄 코인 입금 확인
+  | 'LP_SOLD' // 저프리미엄 코인 매도 완료
+  | 'COMPLETED' // 전체 사이클 정상 완료
+  | 'FAILED' // 사이클 실패
+  | 'HP_ONLY_COMPLETED_TARGET_MISSED'; // 저프리미엄 기회를 못찾아 고프만으로 종료
+
 @Entity('arbitrage_cycles')
 export class ArbitrageCycle {
   @PrimaryGeneratedColumn('uuid') // UUID로 고유 ID 생성
@@ -78,15 +94,6 @@ export class ArbitrageCycle {
     precision: 20,
     scale: 4,
     nullable: true,
-    name: 'high_premium_short_entry_fee_krw',
-  })
-  highPremiumShortEntryFeeKrw: number;
-
-  @Column({
-    type: 'decimal',
-    precision: 20,
-    scale: 4,
-    nullable: true,
     name: 'high_premium_upbit_sell_price_krw',
   })
   highPremiumUpbitSellPriceKrw: number;
@@ -108,15 +115,6 @@ export class ArbitrageCycle {
     name: 'high_premium_sell_fee_krw',
   })
   highPremiumSellFeeKrw: number; // 업비트 매도 수수료
-
-  @Column({
-    type: 'decimal',
-    precision: 20,
-    scale: 4,
-    nullable: true,
-    name: 'high_premium_short_exit_fee_krw',
-  })
-  highPremiumShortExitFeeKrw: number;
 
   @Column({
     type: 'decimal',
@@ -177,15 +175,6 @@ export class ArbitrageCycle {
   @Column({
     type: 'decimal',
     precision: 20,
-    scale: 4,
-    nullable: true,
-    name: 'low_premium_short_entry_fee_krw',
-  })
-  lowPremiumShortEntryFeeKrw: number;
-
-  @Column({
-    type: 'decimal',
-    precision: 20,
     scale: 8,
     nullable: true,
     name: 'low_premium_binance_sell_price_usd',
@@ -209,15 +198,6 @@ export class ArbitrageCycle {
     name: 'low_premium_sell_fee_krw',
   })
   lowPremiumSellFeeKrw: number; // 바이낸스 매도 수수료
-
-  @Column({
-    type: 'decimal',
-    precision: 20,
-    scale: 4,
-    nullable: true,
-    name: 'low_premium_short_exit_fee_krw',
-  })
-  lowPremiumShortExitFeeKrw: number;
 
   @Column({
     type: 'decimal',
@@ -268,8 +248,21 @@ export class ArbitrageCycle {
   })
   totalNetProfitKrw: number;
 
-  @Column({ nullable: true })
-  status: string; // 'IN_PROGRESS', 'HIGH_PREMIUM_COMPLETED', 'COMPLETED', 'FAILED' 등
+  // --- 상태 및 상세 정보 ---
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  status: ArbitrageCycleStatus;
+
+  @Column({ nullable: true, name: 'hp_buy_tx_id' })
+  highPremiumBuyTxId: string;
+
+  @Column({ nullable: true, name: 'hp_withdraw_tx_id' })
+  highPremiumWithdrawTxId: string;
+
+  @Column({ nullable: true, name: 'lp_buy_tx_id' })
+  lowPremiumBuyTxId: string;
+
+  @Column({ nullable: true, name: 'lp_withdraw_tx_id' })
+  lowPremiumWithdrawTxId: string;
 
   @Column({ type: 'text', nullable: true })
   errorDetails: string; // 오류 발생 시 상세 내용

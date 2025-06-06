@@ -75,46 +75,30 @@ export class NotificationComposerService {
     );
 
     // 수수료 관련 변수 (상세 로그용)
-    const hpShortEntryFeeKrw = this.parseAndValidateNumber(
-      cycleData.highPremiumShortEntryFeeKrw,
-    );
+
     const hpTransferFeeKrw = this.parseAndValidateNumber(
       cycleData.highPremiumTransferFeeKrw,
     );
     const hpSellFeeKrw = this.parseAndValidateNumber(
       cycleData.highPremiumSellFeeKrw,
     );
-    const hpShortExitFeeKrw = this.parseAndValidateNumber(
-      cycleData.highPremiumShortExitFeeKrw,
-    );
+
     const highPremiumRecordedFeesKrw =
-      (hpShortEntryFeeKrw || 0) +
-      (hpTransferFeeKrw || 0) +
-      (hpSellFeeKrw || 0) +
-      (hpShortExitFeeKrw || 0);
+      (hpTransferFeeKrw || 0) + (hpSellFeeKrw || 0);
 
     let lowPremiumRecordedFeesKrw = 0;
     if (
       lowSymbol !== 'N/A' &&
       (status === 'COMPLETED' || cycleData.lowPremiumNetProfitKrw !== null)
     ) {
-      const lpShortEntryFeeKrw = this.parseAndValidateNumber(
-        cycleData.lowPremiumShortEntryFeeKrw,
-      );
       const lpTransferFeeKrw = this.parseAndValidateNumber(
         cycleData.lowPremiumTransferFeeKrw,
       );
       const lpSellFeeKrw = this.parseAndValidateNumber(
         cycleData.lowPremiumSellFeeKrw,
       );
-      const lpShortExitFeeKrw = this.parseAndValidateNumber(
-        cycleData.lowPremiumShortExitFeeKrw,
-      );
-      lowPremiumRecordedFeesKrw =
-        (lpShortEntryFeeKrw || 0) +
-        (lpTransferFeeKrw || 0) +
-        (lpSellFeeKrw || 0) +
-        (lpShortExitFeeKrw || 0);
+
+      lowPremiumRecordedFeesKrw = (lpTransferFeeKrw || 0) + (lpSellFeeKrw || 0);
     }
 
     // 사이클 완료 후의 최신 포트폴리오 잔고 조회 (PortfolioUpdateService가 업데이트한 후)
@@ -144,7 +128,7 @@ export class NotificationComposerService {
         `➡️ *최종 잔고: ${updatedTotalBalanceKrwStr}*`;
     } else if (
       status === 'FAILED' ||
-      status === 'HIGH_PREMIUM_ONLY_COMPLETED_TARGET_MISSED'
+      status === 'HP_ONLY_COMPLETED_TARGET_MISSED'
     ) {
       telegramMessage =
         `⚠️ *[시뮬레이션] 차익거래 사이클 ${cycleId} ${status === 'FAILED' ? '실패' : '부분 완료 (목표 미달)'}*\n` +
@@ -207,12 +191,6 @@ export class NotificationComposerService {
     this.logger.debug(
       `      - Upbit Spot Sell Fee: ${hpSellFeeKrw !== null ? hpSellFeeKrw.toFixed(0) : 'N/A'} KRW`,
     );
-    this.logger.debug(
-      `      - Futures Entry Fee: ${hpShortEntryFeeKrw !== null ? hpShortEntryFeeKrw.toFixed(0) : 'N/A'} KRW`,
-    );
-    this.logger.debug(
-      `      - Futures Exit Fee: ${hpShortExitFeeKrw !== null ? hpShortExitFeeKrw.toFixed(0) : 'N/A'} KRW`,
-    );
 
     if (
       lowSymbol !== 'N/A' &&
@@ -235,14 +213,8 @@ export class NotificationComposerService {
       this.logger.debug(
         `      - Binance Spot Sell Fee: ${this.parseAndValidateNumber(cycleData.lowPremiumSellFeeKrw)?.toFixed(0) || 'N/A'} KRW`,
       );
-      this.logger.debug(
-        `      - Futures Entry Fee: ${this.parseAndValidateNumber(cycleData.lowPremiumShortEntryFeeKrw)?.toFixed(0) || 'N/A'} KRW`,
-      );
-      this.logger.debug(
-        `      - Futures Exit Fee: ${this.parseAndValidateNumber(cycleData.lowPremiumShortExitFeeKrw)?.toFixed(0) || 'N/A'} KRW`,
-      );
     } else if (
-      status === 'HIGH_PREMIUM_ONLY_COMPLETED_TARGET_MISSED' ||
+      status === 'HP_ONLY_COMPLETED_TARGET_MISSED' ||
       (status === 'FAILED' && lowSymbol === 'N/A')
     ) {
       this.logger.log(`  --- Low Premium Leg ---`);

@@ -6,7 +6,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import WebSocket from 'ws';
-import { Subject } from 'rxjs';
+import { Subject, BehaviorSubject } from 'rxjs';
 import { ConfigService } from '@nestjs/config';
 
 export interface PriceUpdateData {
@@ -15,7 +15,6 @@ export interface PriceUpdateData {
   price: number;
 }
 
-// WsService 등에서 심볼 목록을 가져갈 수 있도록 인터페이스 정의
 export interface WatchedSymbolConfig {
   symbol: string;
   upbit: string;
@@ -31,13 +30,20 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
   private upbitPrices = new Map<string, number>();
   private binancePrices = new Map<string, number>();
 
-  private readonly _watchedSymbolsConfig: ReadonlyArray<WatchedSymbolConfig>; // ReadonlyArray 사용
+  private readonly _watchedSymbolsConfig: ReadonlyArray<WatchedSymbolConfig>;
 
   private priceUpdateSubject = new Subject<PriceUpdateData>();
   public priceUpdate$ = this.priceUpdateSubject.asObservable();
 
+  // --- [추가된 부분] ---
+  private allConnectionsEstablished = new BehaviorSubject<boolean>(false);
+  public allConnectionsEstablished$ =
+    this.allConnectionsEstablished.asObservable();
+  private connectedSockets = new Set<string>();
+  private totalRequiredConnections = 0;
+  // --- [추가 끝] ---
+
   constructor(private readonly configService: ConfigService) {
-    // 설정에서 심볼 목록을 가져오거나 기본값 사용
     this._watchedSymbolsConfig = this.configService.get<WatchedSymbolConfig[]>(
       'WATCHED_SYMBOLS',
     ) || [
@@ -65,7 +71,10 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
       { symbol: 'grt', upbit: 'KRW-GRT', binance: 'grtusdt' },
       { symbol: 'lsk', upbit: 'KRW-LSK', binance: 'lskusdt' },
       { symbol: 'ardr', upbit: 'KRW-ARDR', binance: 'ardrusdt' },
+      { symbol: 'a', upbit: 'KRW-A', binance: 'ausdt' },
+      { symbol: 'iq', upbit: 'KRW-IQ', binance: 'iqusdt' },
     ];
+    this.totalRequiredConnections = this._watchedSymbolsConfig.length * 2;
   }
 
   onModuleInit() {
@@ -82,15 +91,34 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
     this.closeAllSockets();
   }
 
-  // ⭐ Public getter for watched symbols
   public getWatchedSymbols(): ReadonlyArray<WatchedSymbolConfig> {
     return this._watchedSymbolsConfig;
   }
 
-  private connectToAllFeeds() {
+  private checkAndEmitConnectionStatus() {
+    const isReady =
+      this.connectedSockets.size === this.totalRequiredConnections;
+    if (this.allConnectionsEstablished.getValue() !== isReady) {
+      this.allConnectionsEstablished.next(isReady);
+      if (isReady) {
+        this.logger.log(
+          '✅ All WebSocket connections established. System is ready.',
+        );
+      } else {
+        this.logger.warn(
+          '🔌 A WebSocket connection was lost. System is not ready.',
+        );
+      }
+    }
+  }
+
+  private async connectToAllFeeds() {
     for (const { symbol, upbit, binance } of this._watchedSymbolsConfig) {
+      // 각 거래소 연결을 동시에 시작하되, 다음 코인 쌍으로 넘어가기 전에 지연
       this.connectToUpbit(symbol, upbit);
       this.connectToBinance(symbol, binance);
+      // 250ms 지연으로 서버에 부담을 주지 않음
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
 
@@ -122,6 +150,8 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
 
     socket.on('open', () => {
       this.logger.log(`🟢 [Upbit] Connected for ${market}`);
+      this.connectedSockets.add(`upbit-${symbol}`);
+      this.checkAndEmitConnectionStatus();
       const payload = [
         { ticket: `kimP-pricefeed-${symbol}` },
         { type: 'ticker', codes: [market] },
@@ -132,9 +162,7 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
     socket.on('message', (data) => {
       try {
         const messageString = data.toString('utf8');
-        // Upbit에서 PONG 메시지를 보내는 경우가 있으므로, JSON 파싱 전 확인
         if (messageString === 'PONG') {
-          // this.logger.debug(`[Upbit] PONG received for ${market}`);
           return;
         }
         const json = JSON.parse(messageString);
@@ -160,19 +188,15 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(
         `🔌 [Upbit] Disconnected for ${market}. Code: ${code}, Reason: ${reason.toString()}. Reconnecting...`,
       );
+      this.connectedSockets.delete(`upbit-${symbol}`);
+      this.checkAndEmitConnectionStatus();
       this.upbitSockets.delete(symbol);
       setTimeout(() => this.connectToUpbit(symbol, market), 5000);
     });
 
     socket.on('error', (err) => {
       this.logger.error(`🔥 [Upbit] ${market} WebSocket Error: ${err.message}`);
-      if (
-        socket.readyState !== WebSocket.OPEN &&
-        socket.readyState !== WebSocket.CONNECTING
-      ) {
-        this.upbitSockets.delete(symbol);
-        setTimeout(() => this.connectToUpbit(symbol, market), 5000);
-      }
+      // 'close' 이벤트가 항상 뒤따르므로 여기서 재연결 로직을 중복 실행할 필요 없음
     });
   }
 
@@ -190,6 +214,8 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
 
     socket.on('open', () => {
       this.logger.log(`🟢 [Binance] Connected for ${streamPair}`);
+      this.connectedSockets.add(`binance-${symbol}`);
+      this.checkAndEmitConnectionStatus();
     });
 
     socket.on('message', (data) => {
@@ -199,7 +225,6 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
         if (json.e === '24hrTicker') {
           const price = parseFloat(json?.c);
           if (isNaN(price)) {
-            // parseFloat은 null/undefined에 대해 NaN 반환
             this.logger.warn(
               `⚠️ [Binance ${symbol}] price invalid or null:`,
               json.c,
@@ -220,6 +245,8 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(
         `🔌 [Binance] Disconnected for ${streamPair}. Code: ${code}, Reason: ${reason.toString()}. Reconnecting...`,
       );
+      this.connectedSockets.delete(`binance-${symbol}`);
+      this.checkAndEmitConnectionStatus();
       this.binanceSockets.delete(symbol);
       setTimeout(() => this.connectToBinance(symbol, streamPair), 5000);
     });
@@ -228,13 +255,6 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(
         `🔥 [Binance] ${streamPair} WebSocket Error: ${err.message}`,
       );
-      if (
-        socket.readyState !== WebSocket.OPEN &&
-        socket.readyState !== WebSocket.CONNECTING
-      ) {
-        this.binanceSockets.delete(symbol);
-        setTimeout(() => this.connectToBinance(symbol, streamPair), 5000);
-      }
     });
   }
 
