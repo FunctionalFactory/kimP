@@ -220,7 +220,7 @@ export class BinanceService implements IExchange {
   // [구현 완료]
   async getDepositAddress(
     symbol: string,
-  ): Promise<{ address: string; tag?: string }> {
+  ): Promise<{ address: string; tag?: string; net_type?: string }> {
     const endpoint = '/sapi/v1/capital/deposit/address';
     const params = {
       coin: symbol.toUpperCase(),
@@ -235,10 +235,12 @@ export class BinanceService implements IExchange {
         headers: { 'X-MBX-APIKEY': this.apiKey },
       });
       const data = response.data;
+      console.log(data);
 
       return {
         address: data.address,
         tag: data.tag,
+        net_type: data.network || symbol.toUpperCase(),
       };
     } catch (error) {
       const errorMessage = error.response?.data?.msg || error.message;
@@ -253,14 +255,16 @@ export class BinanceService implements IExchange {
   async withdraw(
     symbol: string,
     address: string,
-    amount: number,
+    amount: string,
     tag?: string,
+    net_type?: string,
   ): Promise<any> {
     const endpoint = '/sapi/v1/capital/withdraw/apply';
     const params: any = {
       coin: symbol.toUpperCase(),
       address: address,
       amount: amount,
+      network: net_type,
       timestamp: Date.now(),
     };
 
@@ -286,6 +290,7 @@ export class BinanceService implements IExchange {
         `[Binance-REAL] Successfully requested withdrawal for ${amount} ${symbol}. Response:`,
         response.data,
       );
+      console.log(response);
       // 출금 요청 결과(id 등)를 반환
       return response.data;
     } catch (error) {

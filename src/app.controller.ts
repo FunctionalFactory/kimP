@@ -185,6 +185,8 @@ export class AppController {
         'binance',
         symbol,
       );
+      console.log('upbitAddress', upbitAddress);
+      console.log('binanceAddress', binanceAddress);
 
       return {
         message: `Successfully fetched deposit address for ${symbol}.`,
@@ -208,9 +210,25 @@ export class AppController {
     try {
       // ⚠️ 여기에 본인의 '바이낸스' XRP 입금 주소와 태그, 그리고 아주 적은 수량을 입력하세요.
       const symbol = process.env.UPBIT_SYMBOL;
-      const address = process.env.UPBIT_ADDRESS;
-      const net_type = process.env.UPBIT_NET_TYPE;
-      const amount = 1; // 테스트용 최소 수량
+      const data1 = await this.exchangeService.getDepositAddress(
+        'upbit',
+        symbol,
+      );
+      const data2 = await this.exchangeService.getDepositAddress(
+        'binance',
+        symbol,
+      );
+      const address = data2.address;
+      const net_type = data1.net_type;
+      const secondary_address = data2.tag;
+      const amount = 2; // 테스트용 최소 수량
+
+      const fee = await this.exchangeService.getWithdrawalChance(
+        'upbit',
+        symbol,
+      );
+
+      const able_amount = amount - fee.fee;
 
       if (address.includes('YOUR_')) {
         return {
@@ -223,7 +241,8 @@ export class AppController {
         'upbit',
         symbol,
         address,
-        amount,
+        able_amount.toString(),
+        secondary_address,
         net_type,
       );
       return {
@@ -233,6 +252,77 @@ export class AppController {
     } catch (error) {
       return {
         message: 'Failed to withdraw from Upbit.',
+        error: error.message,
+      };
+    }
+  }
+  // ====================== [바이낸스 출금 테스트용 코드 추가] ======================
+  @Get('/test-binance-withdraw')
+  async testBinanceWithdraw() {
+    this.logger.warn('[CAUTION] Executing BINANCE WITHDRAWAL TEST.');
+    try {
+      const symbol = 'XRP'; // 예: 'XRP'
+      const data2 = await this.exchangeService.getWalletStatus(
+        'binance',
+        symbol,
+      );
+      const fee = await this.exchangeService.getWithdrawalChance(
+        'binance',
+        symbol,
+      );
+      // 1. 테스트용 정보 설정 (실제 값은 .env 파일에서 관리)
+      const net_type = data2.network; // 예: 'XRP'
+      const amount = 1.6; // 테스트용 최소 수량 (바이낸스 최소 출금량에 맞춰 조절 필요)
+      const able_amount = amount - fee.fee;
+
+      if (!symbol || !net_type) {
+        return {
+          message:
+            'Please set BINANCE_SYMBOL and BINANCE_NET_TYPE in your .env file for testing.',
+        };
+      }
+
+      // 2. 업비트에서 입금 주소 가져오기 (목적지 주소)
+      this.logger.log(`Fetching Upbit deposit address for ${symbol}...`);
+      const upbitDepositInfo = await this.exchangeService.getDepositAddress(
+        'upbit',
+        symbol,
+      );
+
+      if (!upbitDepositInfo || !upbitDepositInfo.address) {
+        throw new Error(
+          `Could not fetch deposit address from Upbit for ${symbol}. Please ensure the address is generated on Upbit.`,
+        );
+      }
+
+      this.logger.log(
+        `Destination address fetched from Upbit: Address=${upbitDepositInfo.address}, Tag=${upbitDepositInfo.tag}`,
+      );
+      this.logger.log(
+        `Attempting to withdraw ${amount} ${symbol} (Network: ${net_type}) from Binance to Upbit...`,
+      );
+
+      // 3. 바이낸스에서 출금 실행
+      const result = await this.exchangeService.withdraw(
+        'binance',
+        symbol,
+        upbitDepositInfo.address,
+        able_amount.toString(),
+        net_type,
+        upbitDepositInfo.tag,
+      );
+
+      return {
+        message: 'Successfully sent Binance withdrawal request.',
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to withdraw from Binance: ${error.message}`,
+        error.stack,
+      );
+      return {
+        message: 'Failed to withdraw from Binance.',
         error: error.message,
       };
     }

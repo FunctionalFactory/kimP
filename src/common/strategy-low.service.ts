@@ -77,7 +77,7 @@ export class StrategyLowService {
         'upbit',
         symbol,
         binanceAddress,
-        filledBuyOrder.filledAmount,
+        filledBuyOrder.filledAmount.toString(),
         binanceTag,
       );
       await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {

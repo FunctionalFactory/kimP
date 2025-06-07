@@ -125,8 +125,9 @@ export class SimulationExchangeService implements IExchange, OnModuleInit {
   async withdraw(
     symbol: string,
     address: string,
-    amount: number,
-    tag?: string,
+    amount: string,
+    secondary_address?: string,
+    net_type?: string,
   ): Promise<any> {
     this.logger.log(
       `[SIMULATION] Withdrawing ${amount} ${symbol} to ${address}`,

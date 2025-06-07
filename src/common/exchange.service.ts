@@ -120,7 +120,7 @@ export class ExchangeService {
   async getDepositAddress(
     exchange: ExchangeType,
     symbol: string,
-  ): Promise<{ address: string; tag?: string }> {
+  ): Promise<{ address: string; tag?: string; net_type?: string }> {
     return this.getService(exchange).getDepositAddress(symbol);
   }
 
@@ -128,13 +128,15 @@ export class ExchangeService {
     exchange: ExchangeType,
     symbol: string,
     address: string,
-    amount: number,
+    amount: string,
+    secondary_address?: string,
     net_type?: string,
   ): Promise<any> {
     return this.getService(exchange).withdraw(
       symbol,
       address,
       amount,
+      secondary_address,
       net_type,
     );
   }

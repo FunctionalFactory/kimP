@@ -144,7 +144,9 @@ export interface IExchange {
    * @param symbol - 'XRP'와 같이 조회할 코인 심볼
    * @returns 입금 주소와 태그(필요시)
    */
-  getDepositAddress(symbol: string): Promise<{ address: string; tag?: string }>;
+  getDepositAddress(
+    symbol: string,
+  ): Promise<{ address: string; tag?: string; net_type?: string }>;
 
   /**
    * 특정 코인을 외부 주소로 출금합니다.
@@ -157,7 +159,8 @@ export interface IExchange {
   withdraw(
     symbol: string,
     address: string,
-    amount: number,
+    amount: string,
+    secondary_address?: string,
     net_type?: string,
   ): Promise<any>;
 

@@ -211,7 +211,7 @@ export class UpbitService implements IExchange {
   // [수정] catch 블록의 if 조건문 수정
   async getDepositAddress(
     symbol: string,
-  ): Promise<{ address: string; tag?: string }> {
+  ): Promise<{ address: string; tag?: string; net_type?: string }> {
     const upperCaseSymbol = symbol.toUpperCase();
 
     try {
@@ -241,7 +241,7 @@ export class UpbitService implements IExchange {
   // [수정] net_type 파라미터를 추가하여 generateNewCoinAddress와 파라미터 구성을 통일
   private async fetchCoinAddress(
     currency: string,
-  ): Promise<{ address: string; tag?: string }> {
+  ): Promise<{ address: string; tag?: string; net_type?: string }> {
     const params = {
       currency: currency,
       net_type: currency, // ⭐️ 파라미터 추가
@@ -259,7 +259,11 @@ export class UpbitService implements IExchange {
           `Deposit address for ${currency} is not generated yet.`,
         );
       }
-      return { address: data.deposit_address, tag: data.secondary_address };
+      return {
+        address: data.deposit_address,
+        tag: data.secondary_address,
+        net_type: data.net_type,
+      };
     } catch (error) {
       const errorMessage =
         error.response?.data?.error?.message || error.message;
@@ -339,22 +343,27 @@ export class UpbitService implements IExchange {
   async withdraw(
     symbol: string,
     address: string,
-    amount: number,
+    amount: string,
+    secondary_address?: string,
     net_type?: string,
   ): Promise<any> {
     const upperCaseSymbol = symbol.toUpperCase();
+    console.log('amount', typeof amount);
 
     // 1. 해싱에 사용할 파라미터 (공식 문서 예시 기준)
     const paramsForHash: any = {
-      currency: upperCaseSymbol,
+      currency: String(upperCaseSymbol),
       net_type: net_type,
-      amount: String(amount),
-      address: address,
+      amount: amount,
+      address: String(address),
+      secondary_address: secondary_address,
     };
 
     // 2. 실제 API 요청 본문에 보낼 파라미터 (추가 정보 포함)
     const paramsForBody: any = {
       ...paramsForHash,
+      // ,
+      // transaction_type: 'default',
     };
 
     const token = this.generateToken(paramsForHash);
@@ -364,6 +373,7 @@ export class UpbitService implements IExchange {
       const response = await axios.post(url, paramsForBody, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      console.log('response', response);
       this.logger.log(
         `[Upbit-REAL] Successfully requested withdrawal for ${amount} ${symbol}.`,
       );
