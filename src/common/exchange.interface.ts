@@ -24,6 +24,16 @@ export type OrderType = 'limit' | 'market';
 export type OrderSide = 'buy' | 'sell';
 
 /**
+ * 출금 가능 정보를 담는 인터페이스
+ */
+export interface WithdrawalChance {
+  currency: string;
+  fee: number; // 출금 수수료
+  minWithdrawal: number; // 최소 출금 수량
+  // ... 필요하다면 일일 한도, 계정별 한도 등 추가 가능
+}
+
+/**
  * 개별 주문 정보를 담는 인터페이스
  */
 export interface Order {
@@ -141,13 +151,20 @@ export interface IExchange {
    * @param symbol - 'XRP'와 같이 출금할 코인 심볼
    * @param address - 출금할 주소
    * @param amount - 출금할 수량
-   * @param tag - (선택적) 리플, 이오스 등 태그가 필요한 경우
+   * @param net_type - (선택적) 리플, 이오스 등 네트워크 타입
    * @returns 출금 요청 결과 (거래소별 상이)
    */
   withdraw(
     symbol: string,
     address: string,
     amount: number,
-    tag?: string,
+    net_type?: string,
   ): Promise<any>;
+
+  /**
+   * 특정 코인의 출금 제약 조건(수수료, 최소수량 등)을 조회합니다.
+   * @param symbol - 'XRP'와 같이 조회할 코인 심볼
+   * @returns 출금 가능 정보
+   */
+  getWithdrawalChance(symbol: string): Promise<WithdrawalChance>;
 }

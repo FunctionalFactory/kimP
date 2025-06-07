@@ -12,6 +12,7 @@ import {
   OrderSide,
   OrderType,
   WalletStatus,
+  WithdrawalChance,
 } from './exchange.interface';
 
 // 이 서비스에 요청할 때 사용할 거래소 타입
@@ -20,7 +21,7 @@ export type ExchangeType = 'upbit' | 'binance';
 @Injectable()
 export class ExchangeService {
   private readonly logger = new Logger(ExchangeService.name);
-  private currentRate = 1393; // fallback value
+  private currentRate = 0; // fallback value
 
   constructor(
     // 토큰을 사용하여 실제 구현체(Real 또는 Simulation)를 주입받음
@@ -128,8 +129,23 @@ export class ExchangeService {
     symbol: string,
     address: string,
     amount: number,
-    tag?: string,
+    net_type?: string,
   ): Promise<any> {
-    return this.getService(exchange).withdraw(symbol, address, amount, tag);
+    return this.getService(exchange).withdraw(
+      symbol,
+      address,
+      amount,
+      net_type,
+    );
+  }
+
+  /**
+   * 특정 코인의 출금 제약 조건(수수료, 최소수량 등)을 조회합니다.
+   */
+  async getWithdrawalChance(
+    exchange: ExchangeType,
+    symbol: string,
+  ): Promise<WithdrawalChance> {
+    return this.getService(exchange).getWithdrawalChance(symbol);
   }
 }

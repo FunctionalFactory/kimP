@@ -8,6 +8,7 @@ import {
   OrderType,
   Balance,
   WalletStatus,
+  WithdrawalChance,
 } from './exchange.interface';
 
 @Injectable()
@@ -130,32 +131,32 @@ export class SimulationExchangeService implements IExchange, OnModuleInit {
     this.logger.log(
       `[SIMULATION] Withdrawing ${amount} ${symbol} to ${address}`,
     );
-
-    const balance = this.balances.get(symbol.toUpperCase());
-    if (!balance || balance.available < amount) {
-      throw new Error(`Insufficient balance to withdraw ${amount} ${symbol}`);
-    }
-
-    // 출금 시 즉시 잔고에서 차감
-    balance.balance -= amount;
-    balance.available -= amount;
-    this.balances.set(symbol.toUpperCase(), balance);
-    this.logger.log(`[SIMULATION] Balance for ${symbol} reduced by ${amount}.`);
-
-    // 입금 시뮬레이션을 위해 60초 후에 다시 잔고를 늘림
-    setTimeout(() => {
-      const targetBalance = this.balances.get(symbol.toUpperCase());
-      if (targetBalance) {
-        targetBalance.balance += amount;
-        targetBalance.available += amount;
-        this.balances.set(symbol.toUpperCase(), targetBalance);
-        this.logger.log(
-          `[SIMULATION] Deposit for ${amount} ${symbol} is confirmed.`,
-        );
-      }
-    }, 60000); // 60초 지연
-
     return { id: `sim-withdraw-${Date.now()}`, amount };
+  }
+
+  // [구현] IExchange 인터페이스를 만족시키기 위해 추가
+  async getWithdrawalChance(symbol: string): Promise<WithdrawalChance> {
+    this.logger.log(`[SIMULATION] Getting withdrawal chance for ${symbol}.`);
+    // 시뮬레이션을 위한 모의 데이터 반환
+    const mockChances: { [key: string]: WithdrawalChance } = {
+      XRP: { currency: 'XRP', fee: 1, minWithdrawal: 2 },
+      BTC: { currency: 'BTC', fee: 0.0005, minWithdrawal: 0.001 },
+    };
+    return (
+      mockChances[symbol.toUpperCase()] || {
+        currency: symbol,
+        fee: 0.1,
+        minWithdrawal: 1,
+      }
+    );
+  }
+
+  // [구현] IExchange 인터페이스를 만족시키기 위해 추가 (getWithdrawalChance 호출)
+  async getWithdrawalFee(
+    symbol: string,
+  ): Promise<{ currency: string; fee: number }> {
+    const chance = await this.getWithdrawalChance(symbol);
+    return { currency: chance.currency, fee: chance.fee };
   }
 
   // --- 이하 메소드들은 기존과 동일하게 유지 ---
