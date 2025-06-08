@@ -2,6 +2,10 @@
 import { Controller, Get, Logger, Param } from '@nestjs/common';
 import { AppService } from './app.service';
 import { ExchangeService } from './common/exchange.service'; // ⭐️ ExchangeService import
+import { PriceFeedService } from './marketdata/price-feed.service';
+import axios from 'axios';
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 @Controller()
 export class AppController {
@@ -10,6 +14,7 @@ export class AppController {
   constructor(
     private readonly appService: AppService,
     private readonly exchangeService: ExchangeService, // ⭐️ 주입
+    private readonly priceFeedService: PriceFeedService,
   ) {}
 
   @Get()
@@ -54,42 +59,62 @@ export class AppController {
       };
     }
   }
-  // ====================== [업비트 주문 테스트용 코드 추가] ======================
+  // ====================== [업비트 주문 테스트용 코드 최종 수정] ======================
   @Get('/test-upbit-order')
   async testUpbitOrder() {
     this.logger.log('[/test-upbit-order] Received test request.');
     try {
-      // XRP를 100원에 5개 매수하는 테스트 주문 (체결되지 않을 만한 가격)
       const symbol = 'XRP';
-      const price = 100;
       const amount = 5;
+      const market = 'KRW-XRP';
+
+      // [수정] 웹소켓 대신 REST API로 현재가를 직접 조회하여 안정성 확보
+      this.logger.log(`Fetching current price for ${market} via REST API...`);
+      const response = await axios.get(
+        `https://api.upbit.com/v1/ticker?markets=${market}`,
+      );
+
+      const currentPrice = response.data[0]?.trade_price;
+
+      if (!currentPrice) {
+        throw new Error('Could not fetch current price via Upbit REST API.');
+      }
+      this.logger.log(`Current price is ${currentPrice} KRW.`);
 
       this.logger.log(
-        `Attempting to create a test order: ${amount} ${symbol} at ${price} KRW`,
+        `Attempting to create a test order: ${amount} ${symbol} at ${currentPrice} KRW`,
       );
+
+      // 현재가로 지정가 매수 주문
       const createdOrder = await this.exchangeService.createOrder(
         'upbit',
         symbol,
         'limit',
         'buy',
         amount,
-        price,
+        currentPrice,
       );
 
       this.logger.log(
         `Order created successfully: ${createdOrder.id}. Now fetching status...`,
       );
+      // 주문 상태 조회
       const orderStatus = await this.exchangeService.getOrder(
         'upbit',
         createdOrder.id,
       );
 
       return {
-        message: 'Successfully created and fetched Upbit order.',
+        message:
+          'Successfully created and fetched Upbit order using REST API price.',
         createdOrder,
         fetchedStatus: orderStatus,
       };
     } catch (error) {
+      this.logger.error(
+        `Failed to create or fetch Upbit order: ${error.message}`,
+        error.stack,
+      );
       return {
         message: 'Failed to create or fetch Upbit order.',
         error: error.message,
@@ -221,7 +246,7 @@ export class AppController {
       const address = data2.address;
       const net_type = data1.net_type;
       const secondary_address = data2.tag;
-      const amount = 2; // 테스트용 최소 수량
+      const amount = 7.9941; // 테스트용 최소 수량
 
       const fee = await this.exchangeService.getWithdrawalChance(
         'upbit',
@@ -262,18 +287,19 @@ export class AppController {
     this.logger.warn('[CAUTION] Executing BINANCE WITHDRAWAL TEST.');
     try {
       const symbol = 'XRP'; // 예: 'XRP'
-      const data2 = await this.exchangeService.getWalletStatus(
-        'binance',
-        symbol,
-      );
+      // const network = await this.exchangeService.getWalletStatus(
+      //   'binance',
+      //   symbol,
+      // );
       const fee = await this.exchangeService.getWithdrawalChance(
         'binance',
         symbol,
       );
       // 1. 테스트용 정보 설정 (실제 값은 .env 파일에서 관리)
-      const net_type = data2.network; // 예: 'XRP'
-      const amount = 1.6; // 테스트용 최소 수량 (바이낸스 최소 출금량에 맞춰 조절 필요)
+      const net_type = symbol; // 예: 'XRP'
+      const amount = 7.5941; // 테스트용 최소 수량 (바이낸스 최소 출금량에 맞춰 조절 필요)
       const able_amount = amount - fee.fee;
+      console.log(fee);
 
       if (!symbol || !net_type) {
         return {

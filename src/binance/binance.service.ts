@@ -256,8 +256,8 @@ export class BinanceService implements IExchange {
     symbol: string,
     address: string,
     amount: string,
-    tag?: string,
     net_type?: string,
+    tag?: string,
   ): Promise<any> {
     const endpoint = '/sapi/v1/capital/withdraw/apply';
     const params: any = {
