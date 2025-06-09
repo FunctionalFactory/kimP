@@ -28,6 +28,7 @@ import { ArbitrageRecordService } from '../db/arbitrage-record.service';
 import { PortfolioLog } from '../db/entities/portfolio-log.entity';
 import { ArbitrageCycle } from '../db/entities/arbitrage-cycle.entity';
 import { StrategyHighService } from 'src/common/strategy-high.service';
+import { DepositMonitorService } from './deposit-monitor.service';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { StrategyHighService } from 'src/common/strategy-high.service';
     FeeCalculatorService,
     ExchangeService,
     FeeCalculatorService,
+    DepositMonitorService,
   ],
   exports: [
     ArbitrageFlowManagerService,

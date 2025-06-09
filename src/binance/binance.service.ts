@@ -85,12 +85,16 @@ export class BinanceService implements IExchange {
     }
   }
 
-  // [구현 완료]
+  /**
+   * [수정] 시장가 매수 시, 수량이 아닌 총액(quoteOrderQty)으로 주문할 수 있도록 수정합니다.
+   * 이는 "100 USDT 만큼 구매"와 같은 요청을 처리하기 위함입니다.
+   * `createOrder`의 `price` 파라미터를 시장가 매수 시에는 '총액'으로 사용하기로 약속합니다.
+   */
   async createOrder(
     symbol: string,
     type: OrderType,
     side: OrderSide,
-    amount: number,
+    amount?: number, // 시장가 매수 시에는 이 값을 사용하지 않을 수 있으므로 optional로 변경
     price?: number,
   ): Promise<Order> {
     const endpoint = '/api/v3/order';
@@ -98,13 +102,31 @@ export class BinanceService implements IExchange {
       symbol: `${symbol.toUpperCase()}USDT`,
       side: side.toUpperCase(),
       type: type.toUpperCase(),
-      quantity: amount,
       timestamp: Date.now(),
     };
 
     if (type === 'limit') {
-      params.timeInForce = 'GTC'; // Good-Til-Canceled
+      params.timeInForce = 'GTC';
       params.price = price;
+      params.quantity = amount;
+    } else if (type === 'market') {
+      if (side === 'buy') {
+        // 시장가 매수: 'price' 파라미터에 담겨온 총액(USDT)을 quoteOrderQty로 사용
+        if (!price || price <= 0) {
+          throw new Error(
+            'For market buy, total cost (price) must be provided.',
+          );
+        }
+        params.quoteOrderQty = price;
+      } else {
+        // 시장가 매도: 'amount' 파라미터에 담겨온 수량을 quantity로 사용
+        if (!amount || amount <= 0) {
+          throw new Error(
+            'For market sell, quantity (amount) must be provided.',
+          );
+        }
+        params.quantity = amount;
+      }
     }
 
     const queryString = querystring.stringify(params);
@@ -113,7 +135,6 @@ export class BinanceService implements IExchange {
 
     try {
       const response = await axios.post(url, null, {
-        // POST 요청이지만 body는 비어있음
         headers: { 'X-MBX-APIKEY': this.apiKey },
       });
       return this.transformBinanceOrder(response.data);

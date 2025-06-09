@@ -1,11 +1,9 @@
 // src/app.controller.ts
-import { Controller, Get, Logger, Param } from '@nestjs/common';
+import { Controller, Get, Logger, Param, Query } from '@nestjs/common';
 import { AppService } from './app.service';
-import { ExchangeService } from './common/exchange.service'; // ⭐️ ExchangeService import
+import { ExchangeService, ExchangeType } from './common/exchange.service'; // ⭐️ ExchangeService import
 import { PriceFeedService } from './marketdata/price-feed.service';
 import axios from 'axios';
-
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 @Controller()
 export class AppController {
@@ -59,13 +57,119 @@ export class AppController {
       };
     }
   }
+  // ====================== [지정 금액만큼 매수 기능 테스트용 코드 수정] ======================
+  @Get('/test-buy-by-value')
+  async testBuyByValue(
+    @Query('exchange') exchange: ExchangeType,
+    @Query('symbol') symbol: string,
+    @Query('amount') amountStr: string,
+    @Query('unit') unit: 'USDT' | 'KRW',
+  ) {
+    this.logger.log(`[/test-buy-by-value] Received request.`);
+
+    try {
+      if (!exchange || !symbol || !amountStr || !unit) {
+        throw new Error(
+          'Please provide all required query parameters: exchange, symbol, amount, unit.',
+        );
+      }
+
+      const amount = parseFloat(amountStr);
+      if (isNaN(amount) || amount <= 0) {
+        throw new Error('Amount must be a positive number.');
+      }
+
+      const upperCaseSymbol = symbol.toUpperCase();
+      let totalCost = amount;
+      const targetExchange = exchange;
+
+      this.logger.log(
+        `Attempting to buy ${totalCost} ${unit} worth of ${upperCaseSymbol} on ${targetExchange}...`,
+      );
+
+      // 업비트에서 USDT 금액으로 구매 요청 시, KRW로 환산
+      if (targetExchange === 'upbit' && unit === 'USDT') {
+        const rate = this.exchangeService.getUSDTtoKRW();
+        if (rate <= 0) {
+          throw new Error('USDT to KRW rate is not available.');
+        }
+        totalCost = amount * rate;
+        this.logger.log(`Converted ${amount} USDT to ${totalCost} KRW.`);
+      } else if (targetExchange === 'binance' && unit === 'KRW') {
+        throw new Error(
+          'Buying with KRW on Binance is not supported. Please use USDT.',
+        );
+      }
+
+      // [추가] 주문 전 잔고 확인 로직
+      if (targetExchange === 'binance' && unit === 'USDT') {
+        this.logger.log('Checking available USDT balance on Binance...');
+        const binanceBalances =
+          await this.exchangeService.getBalances('binance');
+        const usdtBalance = binanceBalances.find((b) => b.currency === 'USDT');
+        const availableUsdt = usdtBalance?.available || 0;
+
+        if (availableUsdt < totalCost) {
+          throw new Error(
+            `Available USDT balance is insufficient. Required: ${totalCost}, Available: ${availableUsdt}`,
+          );
+        }
+        this.logger.log(
+          `Sufficient balance found. Available: ${availableUsdt} USDT.`,
+        );
+      } else if (targetExchange === 'upbit' && unit === 'KRW') {
+        this.logger.log('Checking available KRW balance on Upbit...');
+        const upbitBalances = await this.exchangeService.getBalances('upbit');
+        const krwBalance = upbitBalances.find((b) => b.currency === 'KRW');
+        const availableKrw = krwBalance?.available || 0;
+
+        if (availableKrw < totalCost) {
+          throw new Error(
+            `Available KRW balance is insufficient. Required: ${totalCost}, Available: ${availableKrw}`,
+          );
+        }
+        this.logger.log(
+          `Sufficient balance found. Available: ${availableKrw} KRW.`,
+        );
+      }
+
+      // 시장가 매수 주문 생성
+      // createOrder의 4번째(amount) 파라미터는 null, 5번째(price) 파라미터에 총액을 전달
+      const createdOrder = await this.exchangeService.createOrder(
+        targetExchange,
+        upperCaseSymbol,
+        'market',
+        'buy',
+        undefined, // 시장가 매수 시 수량은 미지정
+        totalCost, // 총액으로 주문
+      );
+
+      const successMsg = `✅ Successfully created a market buy order for ${totalCost.toFixed(4)} ${unit} worth of ${upperCaseSymbol} on ${targetExchange}.`;
+      this.logger.log(successMsg);
+
+      return {
+        message: successMsg,
+        createdOrder,
+      };
+    } catch (error) {
+      this.logger.error(
+        `[TestBuyByValue] Failed: ${error.message}`,
+        error.stack,
+      );
+      return {
+        message: 'Failed to execute buy-by-value test.',
+        error: error.message,
+      };
+    }
+  }
+
   // ====================== [업비트 주문 테스트용 코드 최종 수정] ======================
   @Get('/test-upbit-order')
   async testUpbitOrder() {
     this.logger.log('[/test-upbit-order] Received test request.');
     try {
       const symbol = 'XRP';
-      const amount = 5;
+      const amount = 10;
       const market = 'KRW-XRP';
 
       // [수정] 웹소켓 대신 REST API로 현재가를 직접 조회하여 안정성 확보
@@ -246,7 +350,7 @@ export class AppController {
       const address = data2.address;
       const net_type = data1.net_type;
       const secondary_address = data2.tag;
-      const amount = 7.9941; // 테스트용 최소 수량
+      const amount = 17; // 테스트용 최소 수량
 
       const fee = await this.exchangeService.getWithdrawalChance(
         'upbit',
@@ -297,7 +401,7 @@ export class AppController {
       );
       // 1. 테스트용 정보 설정 (실제 값은 .env 파일에서 관리)
       const net_type = symbol; // 예: 'XRP'
-      const amount = 7.5941; // 테스트용 최소 수량 (바이낸스 최소 출금량에 맞춰 조절 필요)
+      const amount = 16.5953; // 테스트용 최소 수량 (바이낸스 최소 출금량에 맞춰 조절 필요)
       const able_amount = amount - fee.fee;
       console.log(fee);
 
@@ -353,5 +457,195 @@ export class AppController {
       };
     }
   }
-  // =====================================================================
+  // ====================== [업비트 전량 매도 테스트용 코드 추가] ======================
+  @Get('/test-upbit-sell-all/:symbol')
+  async testUpbitSellAll(@Param('symbol') symbol: string) {
+    const upperCaseSymbol = symbol.toUpperCase();
+    this.logger.log(
+      `[/test-upbit-sell-all] Received test request for ${upperCaseSymbol}.`,
+    );
+
+    try {
+      // 1. 해당 코인의 현재 보유 잔고를 조회합니다.
+      this.logger.log(
+        `Fetching balances from Upbit to get available ${upperCaseSymbol}...`,
+      );
+      const balances = await this.exchangeService.getBalances('upbit');
+      const targetBalance = balances.find(
+        (b) => b.currency === upperCaseSymbol,
+      );
+
+      if (!targetBalance || targetBalance.available <= 0) {
+        throw new Error(`No available balance for ${upperCaseSymbol} to sell.`);
+      }
+
+      const sellAmount = targetBalance.available;
+      this.logger.log(
+        `Available balance to sell: ${sellAmount} ${upperCaseSymbol}.`,
+      );
+
+      // 2. REST API로 현재가를 조회합니다.
+      const market = `KRW-${upperCaseSymbol}`;
+      this.logger.log(`Fetching current price for ${market} via REST API...`);
+      const response = await axios.get(
+        `https://api.upbit.com/v1/ticker?markets=${market}`,
+      );
+      const currentPrice = response.data[0]?.trade_price;
+
+      if (!currentPrice) {
+        throw new Error(
+          `Could not fetch current price for ${market} via Upbit REST API.`,
+        );
+      }
+      this.logger.log(`Current price is ${currentPrice} KRW.`);
+
+      // 3. 조회된 수량과 가격으로 전량 매도 주문을 생성합니다.
+      this.logger.log(
+        `Attempting to create a sell order: ${sellAmount} ${upperCaseSymbol} at ${currentPrice} KRW.`,
+      );
+      const createdOrder = await this.exchangeService.createOrder(
+        'upbit',
+        upperCaseSymbol,
+        'limit', // 지정가
+        'sell', // 매도
+        sellAmount,
+        currentPrice,
+      );
+
+      // 4. 생성된 주문의 상태를 조회합니다.
+      this.logger.log(
+        `Sell order created successfully: ${createdOrder.id}. Now fetching status...`,
+      );
+      const orderStatus = await this.exchangeService.getOrder(
+        'upbit',
+        createdOrder.id,
+      );
+
+      return {
+        message: `Successfully created and fetched a sell order for all available ${upperCaseSymbol}.`,
+        createdOrder,
+        fetchedStatus: orderStatus,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to create or fetch Upbit sell order for ${upperCaseSymbol}: ${error.message}`,
+        error.stack,
+      );
+      return {
+        message: `Failed to create or fetch Upbit sell order for ${upperCaseSymbol}.`,
+        error: error.message,
+      };
+    }
+  }
+  // ====================== [바이낸스 전량 매도 테스트용 코드 수정] ======================
+  @Get('/test-binance-sell-all/:symbol')
+  async testBinanceSellAll(@Param('symbol') symbol: string) {
+    const upperCaseSymbol = symbol.toUpperCase();
+    this.logger.log(
+      `[/test-binance-sell-all] Received test request to sell all ${upperCaseSymbol}.`,
+    );
+    try {
+      const market = `${upperCaseSymbol}USDT`;
+
+      // [추가] 1. 바이낸스에서 거래 규칙(Exchange Info)을 가져옵니다.
+      this.logger.log(`Fetching exchange info for ${market}...`);
+      const exchangeInfoRes = await axios.get(
+        'https://api.binance.com/api/v3/exchangeInfo',
+      );
+      const symbolInfo = exchangeInfoRes.data.symbols.find(
+        (s: any) => s.symbol === market,
+      );
+      if (!symbolInfo) {
+        throw new Error(`Could not find exchange info for symbol ${market}`);
+      }
+      const lotSizeFilter = symbolInfo.filters.find(
+        (f: any) => f.filterType === 'LOT_SIZE',
+      );
+      if (!lotSizeFilter) {
+        throw new Error(`Could not find LOT_SIZE filter for ${market}`);
+      }
+      const stepSize = parseFloat(lotSizeFilter.stepSize);
+      this.logger.log(` > Step size for ${market} is ${stepSize}`);
+
+      // 2. 판매할 코인의 바이낸스 잔고를 조회합니다.
+      this.logger.log(
+        `Fetching balances from Binance to get available ${upperCaseSymbol}...`,
+      );
+      const balances = await this.exchangeService.getBalances('binance');
+      const targetBalance = balances.find(
+        (b) => b.currency === upperCaseSymbol,
+      );
+
+      if (!targetBalance || targetBalance.available <= 0) {
+        throw new Error(`No available balance for ${upperCaseSymbol} to sell.`);
+      }
+      const availableAmount = targetBalance.available;
+      this.logger.log(
+        `Available balance to sell (before adjustment): ${availableAmount} ${upperCaseSymbol}.`,
+      );
+
+      // [추가] 3. 조회된 잔고를 stepSize 규칙에 맞게 조정합니다.
+      const adjustedSellAmount =
+        Math.floor(availableAmount / stepSize) * stepSize;
+      // 조정된 수량이 0보다 작거나 같으면 판매 불가
+      if (adjustedSellAmount <= 0) {
+        throw new Error(
+          `Adjusted sell amount (${adjustedSellAmount}) is zero or less. Cannot create order.`,
+        );
+      }
+      this.logger.log(`Adjusted sell amount: ${adjustedSellAmount}`);
+
+      // 4. 바이낸스 REST API로 현재가를 조회합니다.
+      this.logger.log(
+        `Fetching current price for ${market} via Binance REST API...`,
+      );
+      const response = await axios.get(
+        `https://api.binance.com/api/v3/ticker/price?symbol=${market}`,
+      );
+      const currentPrice = parseFloat(response.data.price);
+
+      if (!currentPrice || isNaN(currentPrice)) {
+        throw new Error(`Could not fetch a valid current price for ${market}.`);
+      }
+      this.logger.log(`Current price is ${currentPrice} USDT.`);
+
+      // 5. 조정된 수량과 현재가로 전량 매도 주문을 생성합니다.
+      this.logger.log(
+        `Attempting to create a SELL order: ${adjustedSellAmount} ${upperCaseSymbol} at ${currentPrice} USDT.`,
+      );
+      const createdOrder = await this.exchangeService.createOrder(
+        'binance',
+        upperCaseSymbol,
+        'limit', // 지정가
+        'sell', // 매도
+        adjustedSellAmount, // 조정된 수량 사용
+        currentPrice,
+      );
+
+      // 6. 생성된 주문의 상태를 조회합니다.
+      this.logger.log(
+        `Sell order created successfully: ${createdOrder.id}. Now fetching status...`,
+      );
+      const orderStatus = await this.exchangeService.getOrder(
+        'binance',
+        createdOrder.id,
+        upperCaseSymbol, // 바이낸스 주문 조회에는 심볼이 필요
+      );
+
+      return {
+        message: `Successfully created and fetched a sell order for all available ${upperCaseSymbol} on Binance.`,
+        createdOrder,
+        fetchedStatus: orderStatus,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to create or fetch Binance sell order for ${upperCaseSymbol}: ${error.message}`,
+        error.stack,
+      );
+      return {
+        message: `Failed to create or fetch Binance sell order for ${upperCaseSymbol}.`,
+        error: error.message,
+      };
+    }
+  }
 }
