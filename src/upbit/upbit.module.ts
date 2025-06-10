@@ -33,6 +33,6 @@ export const UPBIT_EXCHANGE_SERVICE = 'UPBIT_EXCHANGE_SERVICE';
     },
   ],
   // 다른 모듈에서 UPBIT_EXCHANGE_SERVICE를 사용할 수 있도록 export
-  exports: [UPBIT_EXCHANGE_SERVICE],
+  exports: [UPBIT_EXCHANGE_SERVICE, UpbitService],
 })
 export class UpbitModule {}

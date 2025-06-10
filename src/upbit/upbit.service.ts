@@ -34,6 +34,55 @@ export class UpbitService implements IExchange {
     }
   }
 
+  /**
+   * ⭐️ [수정] 코인 심볼에 맞는 실제 네트워크 타입을 반환하는 헬퍼 함수
+   * @param symbol 코인 심볼 (e.g., 'BTT', 'XRP')
+   * @returns 실제 네트워크 타입 (e.g., 'TRX', 'XRP')
+   */
+  private getNetworkType(symbol: string): string {
+    const upperSymbol = symbol.toUpperCase();
+    const networkMap: { [key: string]: string } = {
+      BTT: 'TRX',
+      XRP: 'XRP',
+      BTC: 'Bitcoin',
+      XCORE: 'XRP',
+      // 'USDT': 'TRX',
+    };
+    return networkMap[upperSymbol] || upperSymbol;
+  }
+
+  /**
+   * ⭐️ [신규 추가] 특정 코인이 지원하는 모든 네트워크 타입 목록을 조회합니다.
+   * @param symbol 조회할 코인 심볼
+   * @returns 지원하는 net_type 문자열 배열
+   */
+  async getSupportedNetworks(): Promise<string[]> {
+    // '출금 가능 정보' API는 지원 네트워크 정보를 포함하고 있습니다.
+    const token = this.generateToken();
+    const url = `${this.serverUrl}/v1/withdraws/coin_addresses`;
+
+    try {
+      const response = await axios.get(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      console.log(response);
+
+      // API 응답에서 net_types 배열을 추출합니다.
+      const netTypes = response.data?.currency?.net_types || [];
+      this.logger.log(
+        `[Upbit-REAL] Supported networks for: [${netTypes.join(', ')}]`,
+      );
+      return netTypes;
+    } catch (error) {
+      const errorMessage =
+        error.response?.data?.error?.message || error.message;
+      this.logger.error(
+        `[Upbit-REAL] Failed to get supported networks for: ${errorMessage}`,
+      );
+      throw new Error(`Upbit API Error: ${errorMessage}`);
+    }
+  }
+
   // [최종 수정] POST 요청 시에는 해시를 생성하지 않도록 boolean 플래그 추가
   private generateToken(params: any = {}): string {
     const payload: {
@@ -105,9 +154,11 @@ export class UpbitService implements IExchange {
       params.volume = String(amount);
       params.price = String(price);
     } else if (type === 'market' && side === 'buy') {
+      params.ord_type = 'price';
       params.price = String(price); // 시장가 매수 시 주문 총액
     } else {
       // 시장가 매도
+      params.ord_type = 'market';
       params.volume = String(amount);
     }
 
@@ -244,15 +295,15 @@ export class UpbitService implements IExchange {
   ): Promise<{ address: string; tag?: string; net_type?: string }> {
     const params = {
       currency: currency,
-      net_type: currency, // ⭐️ 파라미터 추가
+      net_type: this.getNetworkType(currency), // ⭐️ 파라미터 추가
     };
     const token = this.generateToken(params);
     const url = `${this.serverUrl}/v1/deposits/coin_address?${querystring.encode(params)}`;
-
     try {
       const response = await axios.get(url, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      console.log(response);
       const data = response.data;
       if (!data.deposit_address) {
         throw new Error(
@@ -309,7 +360,7 @@ export class UpbitService implements IExchange {
     const upperCaseSymbol = symbol.toUpperCase();
     const params = {
       currency: upperCaseSymbol,
-      net_type: upperCaseSymbol, // ⭐️ net_type 파라미터 추가
+      net_type: this.getNetworkType(upperCaseSymbol),
     };
     const token = this.generateToken(params);
     const url = `${this.serverUrl}/v1/withdraws/chance?${querystring.encode(params)}`;
@@ -348,7 +399,6 @@ export class UpbitService implements IExchange {
     net_type?: string,
   ): Promise<any> {
     const upperCaseSymbol = symbol.toUpperCase();
-    console.log('amount', typeof amount);
 
     // 1. 해싱에 사용할 파라미터 (공식 문서 예시 기준)
     const paramsForHash: any = {
@@ -373,7 +423,6 @@ export class UpbitService implements IExchange {
       const response = await axios.post(url, paramsForBody, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      console.log('response', response);
       this.logger.log(
         `[Upbit-REAL] Successfully requested withdrawal for ${amount} ${symbol}.`,
       );

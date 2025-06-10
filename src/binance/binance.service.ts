@@ -34,6 +34,30 @@ export class BinanceService implements IExchange {
     }
   }
 
+  private getExchangeTicker(symbol: string): string {
+    const upperSymbol = symbol.toUpperCase();
+    if (upperSymbol === 'BTT') {
+      return 'BTTC';
+    }
+    return upperSymbol;
+  }
+
+  /**
+   * ⭐️ [추가] 코인 심볼에 맞는 실제 네트워크 타입을 반환하는 헬퍼 함수
+   * @param symbol 코인 심볼 (e.g., 'BTT', 'XRP')
+   * @returns 실제 네트워크 타입 (e.g., 'TRX', 'XRP')
+   */
+  private getNetworkType(symbol: string): string {
+    const upperSymbol = symbol.toUpperCase();
+    const networkMap: { [key: string]: string } = {
+      BTTC: 'TRX',
+      XRP: 'XRP',
+      // USDT를 트론 네트워크로 보내고 싶을 경우
+      // USDT: 'TRX',
+    };
+    return networkMap[upperSymbol] || upperSymbol;
+  }
+
   /**
    * 바이낸스 API 인증을 위한 HMAC-SHA256 서명을 생성합니다.
    * @param queryString - API 요청에 포함될 쿼리스트링 (예: 'timestamp=12345678')
@@ -242,9 +266,12 @@ export class BinanceService implements IExchange {
   async getDepositAddress(
     symbol: string,
   ): Promise<{ address: string; tag?: string; net_type?: string }> {
+    const ticker = this.getExchangeTicker(symbol);
+
     const endpoint = '/sapi/v1/capital/deposit/address';
     const params = {
-      coin: symbol.toUpperCase(),
+      coin: ticker,
+      network: this.getNetworkType(ticker), // ⭐️ 수정: 특정 네트워크 주소 요청
       timestamp: Date.now(),
     };
     const queryString = querystring.stringify(params);
@@ -256,7 +283,6 @@ export class BinanceService implements IExchange {
         headers: { 'X-MBX-APIKEY': this.apiKey },
       });
       const data = response.data;
-      console.log(data);
 
       return {
         address: data.address,
@@ -311,7 +337,6 @@ export class BinanceService implements IExchange {
         `[Binance-REAL] Successfully requested withdrawal for ${amount} ${symbol}. Response:`,
         response.data,
       );
-      console.log(response);
       // 출금 요청 결과(id 등)를 반환
       return response.data;
     } catch (error) {

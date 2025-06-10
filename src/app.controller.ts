@@ -4,6 +4,10 @@ import { AppService } from './app.service';
 import { ExchangeService, ExchangeType } from './common/exchange.service'; // ⭐️ ExchangeService import
 import { PriceFeedService } from './marketdata/price-feed.service';
 import axios from 'axios';
+import { DepositMonitorService } from './arbitrage/deposit-monitor.service';
+import { UpbitService } from './upbit/upbit.service';
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 @Controller()
 export class AppController {
@@ -13,7 +17,404 @@ export class AppController {
     private readonly appService: AppService,
     private readonly exchangeService: ExchangeService, // ⭐️ 주입
     private readonly priceFeedService: PriceFeedService,
+    private readonly depositMonitorService: DepositMonitorService,
+    private readonly upbitService: UpbitService,
   ) {}
+
+  // =================================================================
+  // ===================== 전체 플로우 테스트 API =======================
+  // =================================================================
+  @Get('/test-full-flow')
+  async testFullFlow(
+    // ⭐️ 요청에 따라 XRP로만 테스트하도록 코인 파라미터를 수정합니다.
+    @Query('coin') coin: string = 'XRP',
+    @Query('amountKRW') amountKRWStr: string = '20000', // 초기 투자금 (KRW)
+  ) {
+    this.logger.warn(
+      `[FULL FLOW TEST START - ${coin.toUpperCase()}] =======================================`,
+    );
+    const amountKRW = parseFloat(amountKRWStr);
+    const results = [];
+
+    try {
+      // ===== 1. 업비트에서 코인 매수 =====
+      this.logger.log(
+        `[1/8] 업비트에서 ${amountKRW} KRW 만큼 ${coin} 매수 시도...`,
+      );
+
+      // ⭐️ [수정] 매수 전 현재 코인 잔고를 먼저 확인합니다.
+      this.logger.log(` > 매수 전 업비트의 ${coin} 잔고를 조회합니다...`);
+      const initialUpbitBalances =
+        await this.exchangeService.getBalances('upbit');
+      const initialCoinBalance =
+        initialUpbitBalances.find((b) => b.currency === coin.toUpperCase())
+          ?.available || 0;
+      this.logger.log(` > 조회된 매수 전 ${coin} 잔고: ${initialCoinBalance}`);
+
+      const upbitBuyOrder = await this.exchangeService.createOrder(
+        'upbit',
+        coin,
+        'market',
+        'buy',
+        undefined,
+        amountKRW,
+      );
+
+      // ⭐️ [수정] 주문 직후 잠시 대기하여 잔고가 업데이트될 시간을 줍니다.
+      this.logger.log(` > 주문 후 잔고 업데이트를 위해 3초 대기...`);
+      await delay(3000);
+
+      // ⭐️ [수정] 매수 후 잔고를 다시 조회하여 실제 매수된 수량을 계산합니다.
+      this.logger.log(` > 매수 후 업비트의 ${coin} 잔고를 다시 조회합니다...`);
+      const finalUpbitBalances =
+        await this.exchangeService.getBalances('upbit');
+      const finalCoinBalance =
+        finalUpbitBalances.find((b) => b.currency === coin.toUpperCase())
+          ?.available || 0;
+      this.logger.log(` > 조회된 매수 후 ${coin} 잔고: ${finalCoinBalance}`);
+
+      const boughtAmount = finalCoinBalance - initialCoinBalance;
+
+      if (boughtAmount <= 0) {
+        throw new Error(
+          `업비트에서 코인 매수 후 잔고가 증가하지 않았습니다. 주문 ID: ${upbitBuyOrder.id}`,
+        );
+      }
+
+      this.logger.log(` > 성공: ${boughtAmount.toFixed(6)} ${coin} 매수 완료.`);
+      results.push({
+        step: 1,
+        status: 'SUCCESS',
+        details: `Bought ${boughtAmount.toFixed(6)} ${coin} on Upbit`,
+        order: upbitBuyOrder,
+      });
+      await delay(5000); // 다음 단계 전 5초 대기
+
+      // ===== 2. 업비트 -> 바이낸스로 코인 전송 (출금) =====
+      this.logger.log(`[2/8] 업비트에서 바이낸스로 ${coin} 출금 시도...`);
+      const binanceDepositInfo = await this.exchangeService.getDepositAddress(
+        'binance',
+        coin,
+      );
+      const upbitWithdrawalChance =
+        await this.exchangeService.getWithdrawalChance('upbit', coin);
+      let withdrawAmount = boughtAmount - upbitWithdrawalChance.fee;
+
+      if (withdrawAmount <= 0) {
+        throw new Error(
+          `매수된 코인 수량(${boughtAmount})이 출금 수수료(${upbitWithdrawalChance.fee})보다 작아 출금할 수 없습니다.`,
+        );
+      }
+      const upbitPrecision = 10000; // 10^4 (4자리 정밀도) for Upbit
+      withdrawAmount =
+        Math.floor(withdrawAmount * upbitPrecision) / upbitPrecision;
+
+      const upbitWithdrawResult = await this.exchangeService.withdraw(
+        'upbit',
+        coin,
+        binanceDepositInfo.address,
+        withdrawAmount.toString(),
+        binanceDepositInfo.tag,
+        binanceDepositInfo.net_type,
+      );
+      this.logger.log(
+        ` > 성공: 출금 요청 완료 (TxID: ${upbitWithdrawResult.uuid})`,
+      );
+      results.push({
+        step: 2,
+        status: 'SUCCESS',
+        details: `Withdrawal from Upbit requested`,
+        result: upbitWithdrawResult,
+      });
+
+      // ===== 3. 바이낸스 입금 확인 =====
+      this.logger.log(`[3/8] 바이낸스에서 ${coin} 입금 모니터링 시작...`);
+      const depositResult = await this.depositMonitorService.monitorDeposit(
+        'binance',
+        coin,
+        600,
+      ); // 10분 타임아웃
+      if (!depositResult || !depositResult.success) {
+        throw new Error('바이낸스 입금 확인 실패 또는 타임아웃');
+      }
+      this.logger.log(
+        ` > 성공: ${depositResult.depositedAmount.toFixed(6)} ${coin} 입금 확인!`,
+      );
+      results.push({
+        step: 3,
+        status: 'SUCCESS',
+        details: `Deposit confirmed on Binance`,
+        result: depositResult,
+      });
+
+      // ===== 4. 바이낸스에서 코인 전량 매도 =====
+      this.logger.log(`[4/8] 바이낸스에서 ${coin} 전량 매도 시도...`);
+      const binanceSellOrder = await this.executeSellAll('binance', coin);
+      const earnedUSDT = binanceSellOrder.filledAmount * binanceSellOrder.price;
+      this.logger.log(
+        ` > 성공: 전량 매도 완료. ${earnedUSDT.toFixed(4)} USDT 확보.`,
+      );
+      results.push({
+        step: 4,
+        status: 'SUCCESS',
+        details: `Sold all ${coin} on Binance`,
+        order: binanceSellOrder,
+      });
+      await delay(5000);
+
+      // ===== 5. 바이낸스에서 다시 코인 매수 =====
+      this.logger.log(
+        `[5/8] 바이낸스에서 확보한 USDT로 ${coin} 다시 매수 시도...`,
+      );
+
+      // ⭐️ [수정] 매수 전, 실제 보유 USDT 잔고를 직접 조회하여 사용합니다.
+      this.logger.log(` > 매수 전 바이낸스의 USDT 잔고를 조회합니다...`);
+      const binanceBalancesForBuy =
+        await this.exchangeService.getBalances('binance');
+      const usdtBalance = binanceBalancesForBuy.find(
+        (b) => b.currency === 'USDT',
+      );
+
+      if (!usdtBalance || usdtBalance.available <= 0) {
+        throw new Error(`바이낸스에 매수 가능한 USDT 잔고가 없습니다.`);
+      }
+      const availableUSDT = usdtBalance.available;
+      this.logger.log(` > 조회된 매수 가능 금액: ${availableUSDT} USDT`);
+
+      const binanceReturnCoinBuyOrder = await this.exchangeService.createOrder(
+        'binance',
+        coin,
+        'market',
+        'buy',
+        undefined,
+        availableUSDT,
+      );
+      results.push({
+        step: 5,
+        status: 'SUCCESS',
+        details: `Bought ${binanceReturnCoinBuyOrder.filledAmount.toFixed(6)} ${coin} on Binance`,
+        order: binanceReturnCoinBuyOrder,
+      });
+      await delay(5000);
+
+      // ===== 6. 바이낸스 -> 업비트로 코인 전송 (출금) =====
+      this.logger.log(`[6/8] 바이낸스에서 업비트로 ${coin} 출금 시도...`);
+
+      // ⭐️ [수정] 출금 전, 바이낸스 지갑 상태를 먼저 확인합니다.
+      this.logger.log(
+        ` > 출금 전 바이낸스의 ${coin} 지갑 상태를 확인합니다...`,
+      );
+      const walletStatus = await this.exchangeService.getWalletStatus(
+        'binance',
+        coin,
+      );
+      if (!walletStatus.canWithdraw) {
+        throw new Error(
+          `바이낸스 ${coin} 지갑의 출금이 비활성화되어 있습니다.`,
+        );
+      }
+      this.logger.log(` > 지갑 상태 확인 완료: 출금 가능.`);
+
+      this.logger.log(` > 출금 전 바이낸스의 ${coin} 잔고를 조회합니다...`);
+      const binanceBalancesForWithdraw =
+        await this.exchangeService.getBalances('binance');
+      const coinBalance = binanceBalancesForWithdraw.find(
+        (b) => b.currency === coin.toUpperCase(),
+      );
+
+      if (!coinBalance || coinBalance.available <= 0) {
+        throw new Error(`바이낸스에 출금 가능한 ${coin} 잔고가 없습니다.`);
+      }
+      const availableAmount = coinBalance.available;
+      this.logger.log(` > 조회된 출금 가능 수량: ${availableAmount} ${coin}`);
+
+      const upbitDepositInfo = await this.exchangeService.getDepositAddress(
+        'upbit',
+        coin,
+      );
+      console.log(upbitDepositInfo);
+      const binanceWithdrawalChance =
+        await this.exchangeService.getWithdrawalChance('binance', coin);
+      let returnWithdrawAmount = availableAmount - binanceWithdrawalChance.fee;
+
+      if (returnWithdrawAmount <= 0) {
+        throw new Error(
+          `바이낸스 보유 수량(${availableAmount})이 출금 수수료(${binanceWithdrawalChance.fee})보다 작아 출금할 수 없습니다.`,
+        );
+      }
+      const binancePrecision = 100000000;
+      returnWithdrawAmount =
+        Math.floor(returnWithdrawAmount * binancePrecision) / binancePrecision;
+
+      const binanceWithdrawResult = await this.exchangeService.withdraw(
+        'binance',
+        coin,
+        upbitDepositInfo.address,
+        returnWithdrawAmount.toString(),
+        upbitDepositInfo.net_type,
+        upbitDepositInfo.tag,
+      );
+
+      this.logger.log(
+        ` > 성공: 출금 요청 완료 (TxID: ${binanceWithdrawResult.id})`,
+      );
+      results.push({
+        step: 6,
+        status: 'SUCCESS',
+        details: `Withdrawal from Binance requested`,
+        result: binanceWithdrawResult,
+      });
+
+      // ===== 7. 업비트 입금 확인 =====
+      this.logger.log(`[7/8] 업비트에서 ${coin} 입금 모니터링 시작...`);
+      const upbitDepositResult =
+        await this.depositMonitorService.monitorDeposit('upbit', coin, 600); // 10분 타임아웃
+      if (!upbitDepositResult || !upbitDepositResult.success) {
+        throw new Error('업비트 입금 확인 실패 또는 타임아웃');
+      }
+      this.logger.log(
+        ` > 성공: ${upbitDepositResult.depositedAmount.toFixed(6)} ${coin} 입금 확인!`,
+      );
+      results.push({
+        step: 7,
+        status: 'SUCCESS',
+        details: `Deposit confirmed on Upbit`,
+        result: upbitDepositResult,
+      });
+
+      // ===== 8. 업비트에서 코인 전량 매도 =====
+      this.logger.log(`[8/8] 업비트에서 ${coin} 전량 매도 시도...`);
+      const finalSellOrder = await this.executeSellAll('upbit', coin);
+      const finalKRW = finalSellOrder.filledAmount * finalSellOrder.price;
+      this.logger.log(
+        ` > 성공: 최종 매도 완료. ${finalKRW.toFixed(0)} KRW 확보.`,
+      );
+      results.push({
+        step: 8,
+        status: 'SUCCESS',
+        details: `Sold all ${coin} on Upbit`,
+        order: finalSellOrder,
+      });
+
+      // 최종 결과 로깅
+      const profit = finalKRW - amountKRW;
+      this.logger.warn(
+        `[FULL FLOW TEST COMPLETE - ${coin.toUpperCase()}] =================================`,
+      );
+      this.logger.log(` > 초기 투자금: ${amountKRW.toFixed(0)} KRW`);
+      this.logger.log(` > 최종 회수금: ${finalKRW.toFixed(0)} KRW`);
+      this.logger.log(` > 총 손익 (PNL): ${profit.toFixed(0)} KRW`);
+      this.logger.log(` > 수익률: ${((profit / amountKRW) * 100).toFixed(2)}%`);
+      this.logger.warn(
+        `======================================================================`,
+      );
+
+      return {
+        message: 'Full flow test completed successfully.',
+        initialInvestmentKRW: amountKRW,
+        finalReturnKRW: finalKRW,
+        profitAndLoss: profit,
+        steps: results,
+      };
+    } catch (error) {
+      this.logger.error(
+        `[FULL FLOW TEST FAILED] ❌ ${error.message}`,
+        error.stack,
+      );
+      results.push({
+        step: results.length + 1,
+        status: 'FAILED',
+        details: error.message,
+      });
+      return {
+        message: 'Full flow test failed.',
+        error: error.message,
+        completedSteps: results,
+      };
+    }
+  }
+
+  /**
+   * 전량 매도를 위한 헬퍼 함수
+   * @param exchange 거래소
+   * @param symbol 코인 심볼
+   */
+  private async executeSellAll(
+    exchange: ExchangeType,
+    symbol: string,
+  ): Promise<any> {
+    const upperCaseSymbol = symbol.toUpperCase();
+    const balances = await this.exchangeService.getBalances(exchange);
+    const targetBalance = balances.find((b) => b.currency === upperCaseSymbol);
+
+    if (!targetBalance || targetBalance.available <= 0) {
+      throw new Error(
+        `No available balance of ${upperCaseSymbol} on ${exchange} to sell.`,
+      );
+    }
+
+    const sellAmount = targetBalance.available;
+
+    // 바이낸스의 경우, 수량 정밀도(stepSize)에 맞춰 조정 필요
+    if (exchange === 'binance') {
+      const market = `${upperCaseSymbol}USDT`;
+      const exchangeInfoRes = await axios.get(
+        'https://api.binance.com/api/v3/exchangeInfo',
+      );
+      const symbolInfo = exchangeInfoRes.data.symbols.find(
+        (s: any) => s.symbol === market,
+      );
+      const lotSizeFilter = symbolInfo.filters.find(
+        (f: any) => f.filterType === 'LOT_SIZE',
+      );
+      const stepSize = parseFloat(lotSizeFilter.stepSize);
+      const adjustedSellAmount = Math.floor(sellAmount / stepSize) * stepSize;
+
+      if (adjustedSellAmount <= 0) {
+        throw new Error(
+          `Adjusted sell amount for ${upperCaseSymbol} is too small.`,
+        );
+      }
+      return this.exchangeService.createOrder(
+        exchange,
+        upperCaseSymbol,
+        'market',
+        'sell',
+        adjustedSellAmount,
+      );
+    }
+
+    // 업비트는 시장가 매도 시 수량으로 주문
+    return this.exchangeService.createOrder(
+      exchange,
+      upperCaseSymbol,
+      'market',
+      'sell',
+      sellAmount,
+    );
+  }
+
+  /**
+   * ⭐️ [신규 추가] 업비트에서 특정 코인이 지원하는 네트워크 타입 목록을 조회하는 테스트 API
+   */
+  @Get('/test-get-network-type')
+  async testGetNetworkType() {
+    this.logger.log(`[/test-get-network-type] Received test request for`);
+    try {
+      // UpbitService의 새 함수를 직접 호출
+      const supportedNetworks = await this.upbitService.getSupportedNetworks();
+
+      return {
+        message: `Successfully fetched supported networks for from Upbit.`,
+        supported_networks: supportedNetworks,
+      };
+    } catch (error) {
+      return {
+        message: `Failed to fetch supported networks for.`,
+        error: error.message,
+      };
+    }
+  }
 
   @Get()
   getHello(): string {
@@ -314,8 +715,6 @@ export class AppController {
         'binance',
         symbol,
       );
-      console.log('upbitAddress', upbitAddress);
-      console.log('binanceAddress', binanceAddress);
 
       return {
         message: `Successfully fetched deposit address for ${symbol}.`,
@@ -401,9 +800,8 @@ export class AppController {
       );
       // 1. 테스트용 정보 설정 (실제 값은 .env 파일에서 관리)
       const net_type = symbol; // 예: 'XRP'
-      const amount = 16.5953; // 테스트용 최소 수량 (바이낸스 최소 출금량에 맞춰 조절 필요)
+      const amount = 18.157; // 테스트용 최소 수량 (바이낸스 최소 출금량에 맞춰 조절 필요)
       const able_amount = amount - fee.fee;
-      console.log(fee);
 
       if (!symbol || !net_type) {
         return {

@@ -45,6 +45,7 @@ import { DepositMonitorService } from './deposit-monitor.service';
     HighPremiumProcessorService,
     LowPremiumProcessorService,
     CycleCompletionService,
+    DepositMonitorService,
 
     SpreadCalculatorService,
     PortfolioLogService,
@@ -55,7 +56,6 @@ import { DepositMonitorService } from './deposit-monitor.service';
     FeeCalculatorService,
     ExchangeService,
     FeeCalculatorService,
-    DepositMonitorService,
   ],
   exports: [
     ArbitrageFlowManagerService,
@@ -64,6 +64,7 @@ import { DepositMonitorService } from './deposit-monitor.service';
     LowPremiumProcessorService,
     CycleCompletionService,
     ExchangeService,
+    DepositMonitorService,
   ],
 })
 export class ArbitrageModule {}
