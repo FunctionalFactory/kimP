@@ -3,18 +3,19 @@ import { Module } from '@nestjs/common';
 import { BinanceService } from './binance.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SimulationExchangeService } from '../common/simulation-exchange.service';
+import { SimulationModule } from '../common/simulation.module'; // ⭐️ SimulationModule import 추가
 
 // 다른 모듈에서 'BINANCE_EXCHANGE'라는 이름으로 서비스를 주입받기 위한 토큰
 export const BINANCE_EXCHANGE_SERVICE = 'BINANCE_EXCHANGE_SERVICE';
 
 @Module({
   imports: [
-    ConfigModule, // .env 파일 변수를 읽기 위해 ConfigModule import
+    ConfigModule,
+    SimulationModule, // .env 파일 변수를 읽기 위해 ConfigModule import
   ],
   providers: [
     // 실제 서비스와 시뮬레이션 서비스를 모두 NestJS에 등록
     BinanceService,
-    SimulationExchangeService,
     {
       // 'BINANCE_EXCHANGE_SERVICE'라는 이름으로 서비스를 요청하면
       provide: BINANCE_EXCHANGE_SERVICE,

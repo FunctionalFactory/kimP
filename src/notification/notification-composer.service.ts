@@ -26,6 +26,39 @@ export class NotificationComposerService {
     return isNaN(num) ? null : num;
   }
 
+  /**
+   * Telegram MarkdownV2 파싱 오류를 방지하기 위해 특수 문자를 이스케이프합니다.
+   * @param text 이스케이프할 텍스트
+   * @returns 이스케이프된 텍스트
+   */
+  private escapeMarkdown(text: string): string {
+    if (!text) return '';
+    const escapeChars = [
+      '_',
+      '*',
+      '[',
+      ']',
+      '(',
+      ')',
+      '~',
+      '`',
+      '>',
+      '#',
+      '+',
+      '-',
+      '=',
+      '|',
+      '{',
+      '}',
+      '.',
+      '!',
+    ];
+    return text
+      .split('')
+      .map((char) => (escapeChars.includes(char) ? '\\' + char : char))
+      .join('');
+  }
+
   public async composeAndSendNotifications(
     cycleId: string,
     cycleData: ArbitrageCycle | null,
@@ -130,14 +163,18 @@ export class NotificationComposerService {
       status === 'FAILED' ||
       status === 'HP_ONLY_COMPLETED_TARGET_MISSED'
     ) {
+      const sanitizedErrorDetails = this.escapeMarkdown(
+        cycleData.errorDetails || '알 수 없는 오류',
+      );
+
       telegramMessage =
         `⚠️ *[시뮬레이션] 차익거래 사이클 ${cycleId} ${status === 'FAILED' ? '실패' : '부분 완료 (목표 미달)'}*\n` +
-        `사유: ${cycleData.errorDetails || '알 수 없는 오류'}\n` +
+        `사유: ${sanitizedErrorDetails}\n` + // ⭐️ 이스케이프된 오류 메시지 사용
         `고프리미엄(${highSymbol}) 순이익: ${highPremiumNetProfitKrwNum !== null ? highPremiumNetProfitKrwNum.toFixed(0) : 'N/A'}₩\n` +
         (lowSymbol !== 'N/A' && lowPremiumNetProfitKrwNum !== null
           ? `저프리미엄(${lowSymbol}) 순이익: ${lowPremiumNetProfitKrwNum.toFixed(0)}₩\n`
           : '') +
-        `최종 순이익: ${totalNetProfitKrwNum !== null ? totalNetProfitKrwNum.toFixed(0) : 'N/A'}₩ (${totalNetProfitUsdNum !== null ? totalNetProfitUsdNum.toFixed(2) : 'N/A'}$)\n` + // USD 손익도 추가
+        `최종 순이익: ${totalNetProfitKrwNum !== null ? totalNetProfitKrwNum.toFixed(0) : 'N/A'}₩ (${totalNetProfitUsdNum !== null ? totalNetProfitUsdNum.toFixed(2) : 'N/A'}$)\n` +
         `➡️ *현재 잔고: ${updatedTotalBalanceKrwStr}*`;
     } else {
       this.logger.warn(

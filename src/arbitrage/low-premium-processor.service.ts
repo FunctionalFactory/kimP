@@ -192,7 +192,7 @@ export class LowPremiumProcessorService {
       );
 
       try {
-        const randomSeconds = Math.floor(Math.random() * (300 - 60 + 1)) + 60;
+        const randomSeconds = Math.floor(Math.random() * (60 - 60 + 1)) + 60;
         this.logger.log(
           `⬅️ [SIMULATE_LPP] 저프리미엄 ${bestLowPremiumOpportunity.symbol.toUpperCase()} 매수/송금 시작 (${(randomSeconds / 60).toFixed(1)}분 대기)`,
         );

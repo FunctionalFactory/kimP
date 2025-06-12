@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ArbitrageRecordService } from '../db/arbitrage-record.service';
 import { ExchangeService, ExchangeType } from './exchange.service';
 import { Order } from './exchange.interface';
+import { ConfigService } from '@nestjs/config'; // ⭐️ ConfigService import 추가
 
 // 유틸리티 함수: 지정된 시간(ms)만큼 대기
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -19,6 +20,7 @@ export class StrategyHighService {
   constructor(
     private readonly exchangeService: ExchangeService,
     private readonly arbitrageRecordService: ArbitrageRecordService,
+    private readonly configService: ConfigService,
   ) {}
 
   async handleHighPremiumFlow(
@@ -65,11 +67,20 @@ export class StrategyHighService {
         binancePrice,
       );
 
-      const filledBuyOrder = await this.pollOrderStatus(
-        cycleId,
-        'binance',
-        buyOrder.id,
-      );
+      const binanceMode = this.configService.get('BINANCE_MODE');
+      let filledBuyOrder: Order;
+
+      if (binanceMode === 'SIMULATION') {
+        this.logger.log('[SIMULATION] Skipping Binance buy order polling.');
+        filledBuyOrder = buyOrder;
+      } else {
+        filledBuyOrder = await this.pollOrderStatus(
+          cycleId,
+          'binance',
+          buyOrder.id,
+        );
+      }
+
       await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
         status: 'HP_BOUGHT',
         highPremiumBuyTxId: filledBuyOrder.id,
@@ -98,12 +109,21 @@ export class StrategyHighService {
       );
 
       // 3. 업비트 입금 확인
-      await this.pollDepositConfirmation(
-        cycleId,
-        'upbit',
-        symbol,
-        filledBuyOrder.filledAmount,
-      );
+      const upbitMode = this.configService.get('UPBIT_MODE');
+      if (upbitMode === 'SIMULATION') {
+        this.logger.log(
+          '[SIMULATION] Skipping Upbit deposit confirmation polling.',
+        );
+        await delay(2000); // 시뮬레이션 모드에서는 가상 딜레이만 줌
+      } else {
+        await this.pollDepositConfirmation(
+          cycleId,
+          'upbit',
+          symbol,
+          filledBuyOrder.filledAmount,
+        );
+      }
+
       await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
         status: 'HP_DEPOSITED',
       });

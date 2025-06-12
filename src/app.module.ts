@@ -10,6 +10,7 @@ import { ArbitrageModule } from './arbitrage/arbitrage.module';
 import { NotificationModule } from './notification/notification.module';
 import { UpbitModule } from './upbit/upbit.module';
 import { BinanceModule } from './binance/binance.module';
+import { SimulationModule } from './common/simulation.module';
 import { AppController } from './app.controller'; // ⭐️ AppController import 확인
 import { AppService } from './app.service'; // ⭐️ AppService import 확인
 
@@ -35,6 +36,7 @@ import { AppService } from './app.service'; // ⭐️ AppService import 확인
     NotificationModule,
     UpbitModule,
     BinanceModule,
+    SimulationModule,
   ],
   controllers: [AppController], // ⭐️ AppController가 등록되어 있는지 확인
   providers: [AppService], // ⭐️ AppService가 등록되어 있는지 확인

@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ArbitrageRecordService } from '../db/arbitrage-record.service';
 import { ExchangeService, ExchangeType } from './exchange.service';
 import { Order } from './exchange.interface';
+import { ConfigService } from '@nestjs/config'; // ⭐️ ConfigService import 추가
 
 // 유틸리티 함수: 지정된 시간(ms)만큼 대기
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -19,6 +20,7 @@ export class StrategyLowService {
   constructor(
     private readonly exchangeService: ExchangeService,
     private readonly arbitrageRecordService: ArbitrageRecordService,
+    private readonly configService: ConfigService,
   ) {}
 
   async handleLowPremiumFlow(
@@ -59,11 +61,21 @@ export class StrategyLowService {
         buyAmount,
         upbitPrice,
       );
-      const filledBuyOrder = await this.pollOrderStatus(
-        cycleId,
-        'upbit',
-        buyOrder.id,
-      );
+
+      const upbitMode = this.configService.get('UPBIT_MODE');
+      let filledBuyOrder: Order;
+
+      if (upbitMode === 'SIMULATION') {
+        this.logger.log('[SIMULATION] Skipping Upbit buy order polling.');
+        filledBuyOrder = buyOrder;
+      } else {
+        filledBuyOrder = await this.pollOrderStatus(
+          cycleId,
+          'upbit',
+          buyOrder.id,
+        );
+      }
+
       await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
         status: 'LP_BOUGHT',
         lowPremiumBuyTxId: filledBuyOrder.id,
@@ -89,12 +101,20 @@ export class StrategyLowService {
       );
 
       // 3. 바이낸스 입금 확인
-      await this.pollDepositConfirmation(
-        cycleId,
-        'binance',
-        symbol,
-        filledBuyOrder.filledAmount,
-      );
+      const binanceMode = this.configService.get('BINANCE_MODE');
+      if (binanceMode === 'SIMULATION') {
+        this.logger.log(
+          '[SIMULATION] Skipping Binance deposit confirmation polling.',
+        );
+        await delay(2000); // 시뮬레이션 모드에서는 가상 딜레이만 줌
+      } else {
+        await this.pollDepositConfirmation(
+          cycleId,
+          'binance',
+          symbol,
+          filledBuyOrder.filledAmount,
+        );
+      }
       await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
         status: 'LP_DEPOSITED',
       });
@@ -142,6 +162,7 @@ export class StrategyLowService {
       await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
         status: 'COMPLETED',
         endTime: new Date(),
+        lowPremiumSymbol: symbol,
         lowPremiumNetProfitKrw: lowPremiumNetProfitKrw,
         lowPremiumNetProfitUsd: lowPremiumNetProfitKrw / rate,
         totalNetProfitKrw,

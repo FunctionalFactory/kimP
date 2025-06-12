@@ -121,7 +121,7 @@ export class HighPremiumProcessorService {
         `✨ [HIGH_PREMIUM_START] ${data.symbol.toUpperCase()} ... 총 자본 ${highPremiumInvestmentKRW.toFixed(0)} KRW로 사이클 시작! (ID: ${this.cycleStateService.activeCycleId})`,
       );
 
-      const randomSeconds = Math.floor(Math.random() * (300 - 60 + 1)) + 60;
+      const randomSeconds = Math.floor(Math.random() * (60 - 60 + 1)) + 60;
       this.logger.log(
         `➡️ [SIMULATE] 고프리미엄 ${data.symbol.toUpperCase()} 매수 및 송금 시작 (${(randomSeconds / 60).toFixed(1)}분 대기)`,
       );

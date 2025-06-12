@@ -18,6 +18,8 @@ export class SimulationExchangeService implements IExchange, OnModuleInit {
   // 잔고를 Map으로 관리하여 동적으로 변경
   private balances = new Map<string, Balance>();
 
+  private simulatedOrders = new Map<string, Order>(); // 생성된 주문을 저장할 Map
+
   onModuleInit() {
     this.logger.log('SimulationExchangeService has been initialized.');
     // 초기 잔고 설정
@@ -27,6 +29,7 @@ export class SimulationExchangeService implements IExchange, OnModuleInit {
   // 테스트 등을 위해 잔고를 초기화하는 메소드
   public resetBalances(): void {
     this.balances.clear();
+    this.simulatedOrders.clear(); // ⭐️ 잔고 리셋 시 주문 기록도 클리어
     this.balances.set('KRW', {
       currency: 'KRW',
       balance: 10000000,
@@ -62,12 +65,20 @@ export class SimulationExchangeService implements IExchange, OnModuleInit {
     const baseCurrency = symbol.toUpperCase(); // 예: XRP
     const quoteCurrency = 'KRW'; // 예: KRW
 
-    const baseBalance = this.balances.get(baseCurrency) || {
-      currency: baseCurrency,
-      balance: 0,
-      locked: 0,
-      available: 0,
-    };
+    // 잔고가 없는 코인이면 동적으로 생성
+    if (!this.balances.has(baseCurrency)) {
+      this.balances.set(baseCurrency, {
+        currency: baseCurrency,
+        balance: 0,
+        locked: 0,
+        available: 0,
+      });
+      this.logger.log(
+        `[SIMULATION] Dynamically initialized balance for ${baseCurrency}.`,
+      );
+    }
+
+    const baseBalance = this.balances.get(baseCurrency)!;
     const quoteBalance = this.balances.get(quoteCurrency)!;
 
     // 잔고 확인 및 업데이트
@@ -112,6 +123,9 @@ export class SimulationExchangeService implements IExchange, OnModuleInit {
       timestamp: new Date(),
       fee: { currency: 'KRW', cost: amount * orderPrice * 0.0005 },
     };
+
+    this.logger.log(`[SIMULATION] Storing order ${mockOrder.id} in memory.`);
+    this.simulatedOrders.set(mockOrder.id, mockOrder); // ⭐️ 생성된 주문을 Map에 저장
 
     this.logger.log(`[SIMULATION] Order ${mockOrder.id} has been filled.`);
     return mockOrder;
@@ -163,7 +177,32 @@ export class SimulationExchangeService implements IExchange, OnModuleInit {
   // --- 이하 메소드들은 기존과 동일하게 유지 ---
 
   async getOrder(orderId: string, symbol?: string): Promise<Order> {
-    throw new Error('Method not fully implemented for simulation.');
+    this.logger.log(`[SIMULATION] Getting status for order ${orderId}`);
+    const storedOrder = this.simulatedOrders.get(orderId);
+
+    if (storedOrder) {
+      this.logger.log(
+        `[SIMULATION] Found stored order details for ${orderId}.`,
+      );
+      return storedOrder; // ⭐️ 저장된 주문 정보가 있으면 그대로 반환
+    }
+
+    // 혹시 모를 예외 상황에 대비한 폴백(Fallback) 로직
+    this.logger.warn(
+      `[SIMULATION] Order ${orderId} not found in memory. Returning a generic mock.`,
+    );
+    return {
+      id: orderId,
+      symbol: symbol ? `${symbol.toUpperCase()}/KRW` : 'SIM/KRW',
+      type: 'limit',
+      side: 'buy',
+      price: 0,
+      amount: 0,
+      filledAmount: 0,
+      status: 'filled',
+      timestamp: new Date(),
+      fee: { currency: 'KRW', cost: 0 },
+    };
   }
 
   async getOrderBook(symbol: string): Promise<OrderBook> {
