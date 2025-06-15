@@ -7,10 +7,7 @@ import {
 } from './arbitrage-cycle-state.service';
 import { PriceFeedService } from '../marketdata/price-feed.service';
 import { SpreadCalculatorService } from '../common/spread-calculator.service';
-import {
-  HighPremiumProcessorService,
-  HighPremiumConditionData,
-} from './high-premium-processor.service';
+import { HighPremiumProcessorService } from './high-premium-processor.service';
 import {
   LowPremiumProcessorService,
   LowPremiumResult,
@@ -128,6 +125,21 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
 
   public async handlePriceUpdate(symbol: string): Promise<void> {
     const currentState = this.cycleStateService.currentCycleExecutionStatus;
+
+    if (this.configService.get<string>('TRADING_ENABLED') === 'false') {
+      // this.logger.verbose('Trading is disabled via configuration.'); // 필요시 로그 활성화
+      return;
+    }
+
+    if (this.cycleStateService.hasReachedMaxCycles()) {
+      if (currentState !== CycleExecutionStatus.STOPPED) {
+        this.logger.warn(
+          `[FlowManager] 최대 사이클 횟수에 도달하여 더 이상 새로운 거래를 시작하지 않습니다.`,
+        );
+        // 상태 서비스 내부에서 상태를 STOPPED로 변경하므로 여기선 추가 작업 불필요
+      }
+      return;
+    }
 
     // IDLE 또는 DECISION_WINDOW_ACTIVE 상태일 때만 고프리미엄 기회 탐색
     if (

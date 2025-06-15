@@ -52,6 +52,17 @@ export class BinanceService implements IExchange {
     const networkMap: { [key: string]: string } = {
       BTTC: 'TRX',
       XRP: 'XRP',
+      GRT: 'ETH',
+      MANA: 'ETH',
+      NEO: 'NEO3',
+      QTUM: 'QTUM',
+      VET: 'VET',
+      ZIL: 'ZIL',
+      AVAX: 'AVAXC',
+      ATOM: 'ATOM',
+      ADA: 'ADA',
+      ALGO: 'ALGO',
+      DOT: 'DOT',
       // USDT를 트론 네트워크로 보내고 싶을 경우
       // USDT: 'TRX',
     };

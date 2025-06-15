@@ -2,6 +2,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ExchangeService, ExchangeType } from '../common/exchange.service';
 import { TelegramService } from '../common/telegram.service';
+import { ConfigService } from '@nestjs/config';
 
 // 비동기 지연을 위한 유틸리티 함수
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -9,11 +10,16 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 @Injectable()
 export class DepositMonitorService {
   private readonly logger = new Logger(DepositMonitorService.name);
+  private readonly notificationMode: string;
 
   constructor(
     private readonly exchangeService: ExchangeService,
     private readonly telegramService: TelegramService,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.notificationMode =
+      this.configService.get<string>('NOTIFICATION_MODE') || 'SUMMARY';
+  }
 
   /**
    * 특정 거래소와 코인에 대한 입금 모니터링을 시작합니다.
@@ -29,9 +35,12 @@ export class DepositMonitorService {
     this.logger.log(
       `[DepositMonitor] Starting to monitor ${symbol} deposit on ${exchange}...`,
     );
-    await this.telegramService.sendMessage(
-      `[입금 모니터링 시작] ${exchange.toUpperCase()}에서 ${symbol.toUpperCase()} 코인의 입금을 확인합니다. (최대 ${timeoutSeconds / 60}분)`,
-    );
+
+    if (this.notificationMode === 'VERBOSE') {
+      await this.telegramService.sendMessage(
+        `[입금 모니터링 시작] ${exchange.toUpperCase()}에서 ${symbol.toUpperCase()} 코인의 입금을 확인합니다. (최대 ${timeoutSeconds / 60}분)`,
+      );
+    }
 
     const startTime = Date.now();
     const upperCaseSymbol = symbol.toUpperCase();
@@ -60,13 +69,14 @@ export class DepositMonitorService {
           `[Polling] Current balance: ${currentBalance} ${upperCaseSymbol}`,
         );
 
-        // 3. 잔고가 증가했으면 입금으로 간주하고 알림 후 종료
         if (currentBalance > initialBalance) {
           const depositedAmount = currentBalance - initialBalance;
           const message = `✅ [입금 완료] ${exchange.toUpperCase()}에 ${depositedAmount.toFixed(6)} ${upperCaseSymbol} 입금이 확인되었습니다!\n- 현재 잔고: ${currentBalance.toFixed(6)} ${upperCaseSymbol}`;
 
           this.logger.log(message);
-          await this.telegramService.sendMessage(message);
+          if (this.notificationMode === 'VERBOSE') {
+            await this.telegramService.sendMessage(message);
+          }
           return { success: true, depositedAmount };
         }
       }
@@ -76,7 +86,9 @@ export class DepositMonitorService {
         timeoutSeconds / 60
       }분 내에 ${exchange.toUpperCase()}의 ${symbol.toUpperCase()} 입금을 확인할 수 없었습니다.`;
       this.logger.warn(timeoutMessage);
-      await this.telegramService.sendMessage(timeoutMessage);
+      if (this.notificationMode === 'VERBOSE') {
+        await this.telegramService.sendMessage(timeoutMessage);
+      }
       return { success: false, depositedAmount: 0 };
     } catch (error) {
       this.logger.error(

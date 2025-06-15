@@ -85,8 +85,22 @@ export class HighPremiumProcessorService {
       );
       return { success: false, nextStep: 'failed' };
     }
+    const strategy = this.configService.get<string>('INVESTMENT_STRATEGY');
+    const percentage = this.configService.get<number>('INVESTMENT_PERCENTAGE');
+    let highPremiumInvestmentKRW: number;
 
-    const highPremiumInvestmentKRW = currentTotalKRWCapital;
+    if (strategy === 'PERCENTAGE' && percentage > 0 && percentage <= 100) {
+      highPremiumInvestmentKRW = currentTotalKRWCapital * (percentage / 100);
+      this.logger.log(
+        `[INVESTMENT] PERCENTAGE(${percentage}%) 전략 적용. 투자금: ${highPremiumInvestmentKRW.toFixed(0)} KRW`,
+      );
+    } else {
+      highPremiumInvestmentKRW = currentTotalKRWCapital;
+      this.logger.log(
+        `[INVESTMENT] FULL_CAPITAL 전략 적용. 투자금: ${highPremiumInvestmentKRW.toFixed(0)} KRW`,
+      );
+    }
+
     const highPremiumInitialRate = data.rate;
     const highPremiumInvestmentUSDT =
       highPremiumInvestmentKRW / highPremiumInitialRate;

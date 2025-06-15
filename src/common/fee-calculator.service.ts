@@ -29,34 +29,54 @@ interface FeeResult {
 
 @Injectable()
 export class FeeCalculatorService {
-  private readonly TRANSFER_FEE_TABLE_KRW: Record<string, number> = {
-    xrp: 0.25,
-    trx: 15,
-    doge: 5,
-    sol: 0.02,
-    matic: 0.1,
-    ltc: 0.001,
-    algo: 0.01,
-    atom: 0.01,
-    eos: 0.01,
+  private readonly BINANCE_TRANSFER_FEE_TABLE: Record<string, number> = {
+    xrp: 0.2,
+    trx: 1,
+    doge: 4,
+    sol: 0.001,
+    algo: 0.008,
+    atom: 0.02,
     xlm: 0.01,
-    ada: 0.01,
-    dot: 0.01,
+    ada: 0.8,
+    dot: 0.8,
+    avax: 0.008,
+    hbar: 0.06,
+    zil: 1,
+    vet: 3,
+    icx: 0.02,
+    qtum: 0.05,
+    neo: 0,
+    bttc: 4000, // 바이낸스는 BTT가 아닌 BTTC 티커 사용
+    mana: 6.76, // ERC20 기준
+    grt: 20, // ERC20 기준
+    lsk: 4.42,
+    ardr: 2,
+    iq: 50,
+  };
+  private readonly UPBIT_TRANSFER_FEE_TABLE: Record<string, number> = {
+    xrp: 0.4,
+    trx: 0.9,
+    doge: 8,
+    sol: 0.009,
+    algo: 0.09,
+    atom: 0.02,
+    xlm: 0.005,
+    ada: 0.45,
+    dot: 0.075,
     avax: 0.01,
-    ftm: 0.01,
     hbar: 0.01,
-    zil: 0.01,
-    vet: 0.01,
-    icx: 0.01,
-    qtum: 0.01,
-    neo: 0.01,
-    btt: 0.01,
-    mana: 0.01,
-    grt: 0.01,
-    lsk: 0.01,
-    ardr: 0.01,
+    zil: 0.15,
+    vet: 29.34,
+    icx: 0.009,
+    qtum: 0.009,
+    neo: 0.03,
+    btt: 0,
+    mana: 4.28,
+    grt: 7.3,
+    lsk: 0.5,
+    ardr: 2,
     a: 0.01,
-    iq: 0.01,
+    iq: 0,
   };
 
   private _applySlippage(
@@ -74,6 +94,14 @@ export class FeeCalculatorService {
       // 매도 시에는 가격이 약간 내림
       return price * (1 - slippageRate);
     }
+  }
+
+  private getBinanceTicker(symbol: string): string {
+    const upperSymbol = symbol.toUpperCase();
+    if (upperSymbol === 'BTT') {
+      return 'BTTC';
+    }
+    return upperSymbol;
   }
 
   calculate(input: FeeInput): FeeResult {
@@ -169,9 +197,10 @@ export class FeeCalculatorService {
       amount * binancePrice * futuresFeeRate * rate;
     const upbitSellFeeKrw = amount * upbitPrice * upbitSellFeeRate;
 
-    const transferUnit = this.TRANSFER_FEE_TABLE_KRW[symbol.toLowerCase()];
+    const binanceTicker = this.getBinanceTicker(symbol).toLowerCase();
+    const transferUnit = this.BINANCE_TRANSFER_FEE_TABLE[binanceTicker];
     const transferCoinToUpbitFeeKrw =
-      transferUnit !== undefined ? transferUnit * upbitPrice : 0;
+      transferUnit !== undefined ? transferUnit * binancePrice * rate : 0;
 
     const usdtTransferFeeKrw = 1 * rate;
 
@@ -224,9 +253,9 @@ export class FeeCalculatorService {
     const binanceFuturesExitFeeKrw =
       amount * binancePrice * futuresFeeRate * rate;
 
-    const transferUnit = this.TRANSFER_FEE_TABLE_KRW[symbol.toLowerCase()];
+    const transferUnit = this.UPBIT_TRANSFER_FEE_TABLE[symbol.toLowerCase()];
     const transferCoinToBinanceFeeKrw =
-      transferUnit !== undefined ? transferUnit * binancePrice * rate : 0;
+      transferUnit !== undefined ? transferUnit * upbitPrice : 0; // 업비트 출금 시에는 업비트 가격으로 계산
 
     const total =
       upbitBuyFeeKrw +

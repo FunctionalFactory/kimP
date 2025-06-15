@@ -46,6 +46,8 @@ export class UpbitService implements IExchange {
       XRP: 'XRP',
       BTC: 'Bitcoin',
       XCORE: 'XRP',
+      MANA: 'ETH',
+      GRT: 'ETH',
       // 'USDT': 'TRX',
     };
     return networkMap[upperSymbol] || upperSymbol;
@@ -231,6 +233,7 @@ export class UpbitService implements IExchange {
       const response = await axios.get<any[]>(url, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      console.log(response);
 
       const targetCurrency = response.data.find(
         (c) => c.currency.toUpperCase() === symbol.toUpperCase(),
@@ -329,7 +332,7 @@ export class UpbitService implements IExchange {
   private async generateNewCoinAddress(currency: string): Promise<any> {
     const params = {
       currency: currency,
-      net_type: currency,
+      net_type: this.getNetworkType(currency), // ◀️ 기존: currency, 수정: this.getNetworkType(currency)
     };
     const token = this.generateToken(params);
     const url = `${this.serverUrl}/v1/deposits/generate_coin_address`;

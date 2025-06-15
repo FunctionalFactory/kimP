@@ -2,6 +2,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PortfolioLog } from '../db/entities/portfolio-log.entity'; // PortfolioLog 타입 임포트
 import { HighPremiumConditionData } from './high-premium-processor.service';
+import { ConfigService } from '@nestjs/config';
 
 // WsService에서 가져온 CycleExecutionStatus enum
 export enum CycleExecutionStatus {
@@ -10,6 +11,7 @@ export enum CycleExecutionStatus {
   HIGH_PREMIUM_PROCESSING,
   AWAITING_LOW_PREMIUM,
   LOW_PREMIUM_PROCESSING,
+  STOPPED,
 }
 
 @Injectable()
@@ -25,6 +27,19 @@ export class ArbitrageCycleStateService {
   private _latestPortfolioLogAtCycleStart: PortfolioLog | null = null;
   private _bestOpportunityCandidate: HighPremiumConditionData | null = null;
   private _decisionTimer: NodeJS.Timeout | null = null;
+
+  // [추가] 사이클 횟수 제어 변수
+  private _completedCycleCount = 0;
+  private readonly _maxCycles: number;
+
+  constructor(private readonly configService: ConfigService) {
+    this._maxCycles = this.configService.get<number>('PRETEST_MAX_CYCLES') || 0;
+    if (this._maxCycles > 0) {
+      this.logger.log(
+        `[State] 프리테스트 모드 활성화. 최대 ${this._maxCycles}회 사이클 실행.`,
+      );
+    }
+  }
 
   // Getters
   get currentCycleExecutionStatus(): CycleExecutionStatus {
@@ -44,6 +59,26 @@ export class ArbitrageCycleStateService {
   }
   get latestPortfolioLogAtCycleStart(): PortfolioLog | null {
     return this._latestPortfolioLogAtCycleStart;
+  }
+
+  public incrementCompletedCycleCount(): void {
+    if (this._maxCycles > 0) {
+      this._completedCycleCount++;
+      this.logger.log(
+        `[State] 사이클 완료. (진행: ${this._completedCycleCount}/${this._maxCycles})`,
+      );
+      if (this.hasReachedMaxCycles()) {
+        this._currentCycleExecutionStatus = CycleExecutionStatus.STOPPED;
+        this.logger.warn(
+          `[State] 최대 사이클 횟수에 도달하여 시스템을 중지합니다.`,
+        );
+      }
+    }
+  }
+
+  public hasReachedMaxCycles(): boolean {
+    if (this._maxCycles === 0) return false;
+    return this._completedCycleCount >= this._maxCycles;
   }
 
   public getBestOpportunity(): HighPremiumConditionData | null {
@@ -142,11 +177,16 @@ export class ArbitrageCycleStateService {
       `Resetting cycle state. Previous Cycle ID: ${this._activeCycleId || 'N/A'}`,
     );
     this.clearDecisionWindow();
+
+    if (this._currentCycleExecutionStatus !== CycleExecutionStatus.STOPPED) {
+      this._currentCycleExecutionStatus = CycleExecutionStatus.IDLE;
+    }
+
     this._currentCycleExecutionStatus = CycleExecutionStatus.IDLE;
     this._activeCycleId = null;
     this._requiredLowPremiumNetProfitKrwForActiveCycle = null;
     this._highPremiumInitialRateForActiveCycle = null;
     this._lowPremiumSearchStartTime = null;
-    this._latestPortfolioLogAtCycleStart = null; // Reset for the next cycle
+    this._latestPortfolioLogAtCycleStart = null;
   }
 }

@@ -49,30 +49,23 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
     ) || [
       { symbol: 'xrp', upbit: 'KRW-XRP', binance: 'xrpusdt' },
       { symbol: 'trx', upbit: 'KRW-TRX', binance: 'trxusdt' },
-      { symbol: 'doge', upbit: 'KRW-DOGE', binance: 'dogeusdt' },
-      { symbol: 'sol', upbit: 'KRW-SOL', binance: 'solusdt' },
-      { symbol: 'matic', upbit: 'KRW-MATIC', binance: 'maticusdt' },
-      { symbol: 'algo', upbit: 'KRW-ALGO', binance: 'algousdt' },
-      { symbol: 'atom', upbit: 'KRW-ATOM', binance: 'atomusdt' },
-      { symbol: 'eos', upbit: 'KRW-EOS', binance: 'eosusdt' },
-      { symbol: 'xlm', upbit: 'KRW-XLM', binance: 'xlmusdt' },
-      { symbol: 'ada', upbit: 'KRW-ADA', binance: 'adausdt' },
-      { symbol: 'dot', upbit: 'KRW-DOT', binance: 'dotusdt' },
-      { symbol: 'avax', upbit: 'KRW-AVAX', binance: 'avaxusdt' },
-      { symbol: 'ftm', upbit: 'KRW-FTM', binance: 'ftmusdt' },
+      { symbol: 'doge', upbit: 'KRW-DOGE', binance: 'dogeusdt' }, //
+      { symbol: 'sol', upbit: 'KRW-SOL', binance: 'solusdt' }, //
+      { symbol: 'algo', upbit: 'KRW-ALGO', binance: 'algousdt' }, //
+      { symbol: 'atom', upbit: 'KRW-ATOM', binance: 'atomusdt' }, //
+      { symbol: 'ada', upbit: 'KRW-ADA', binance: 'adausdt' }, //
+      { symbol: 'dot', upbit: 'KRW-DOT', binance: 'dotusdt' }, //
+      { symbol: 'avax', upbit: 'KRW-AVAX', binance: 'avaxusdt' }, //
       { symbol: 'hbar', upbit: 'KRW-HBAR', binance: 'hbarusdt' },
-      { symbol: 'zil', upbit: 'KRW-ZIL', binance: 'zilusdt' },
-      { symbol: 'vet', upbit: 'KRW-VET', binance: 'vetusdt' },
-      { symbol: 'icx', upbit: 'KRW-ICX', binance: 'icxusdt' },
-      { symbol: 'qtum', upbit: 'KRW-QTUM', binance: 'qtumusdt' },
-      { symbol: 'neo', upbit: 'KRW-NEO', binance: 'neousdt' },
-      { symbol: 'btt', upbit: 'KRW-BTT', binance: 'bttcusdt' },
-      { symbol: 'mana', upbit: 'KRW-MANA', binance: 'manausdt' },
-      { symbol: 'grt', upbit: 'KRW-GRT', binance: 'grtusdt' },
-      { symbol: 'lsk', upbit: 'KRW-LSK', binance: 'lskusdt' },
-      { symbol: 'ardr', upbit: 'KRW-ARDR', binance: 'ardrusdt' },
-      { symbol: 'a', upbit: 'KRW-A', binance: 'ausdt' },
-      { symbol: 'iq', upbit: 'KRW-IQ', binance: 'iqusdt' },
+      { symbol: 'zil', upbit: 'KRW-ZIL', binance: 'zilusdt' }, //
+      { symbol: 'vet', upbit: 'KRW-VET', binance: 'vetusdt' }, //
+      { symbol: 'icx', upbit: 'KRW-ICX', binance: 'icxusdt' }, //
+      { symbol: 'qtum', upbit: 'KRW-QTUM', binance: 'qtumusdt' }, //
+      { symbol: 'neo', upbit: 'KRW-NEO', binance: 'neousdt' }, //
+      { symbol: 'btt', upbit: 'KRW-BTT', binance: 'bttcusdt' }, //
+      { symbol: 'mana', upbit: 'KRW-MANA', binance: 'manausdt' }, //
+      { symbol: 'grt', upbit: 'KRW-GRT', binance: 'grtusdt' }, //
+      { symbol: 'ardr', upbit: 'KRW-ARDR', binance: 'ardrusdt' }, //
     ];
     this.totalRequiredConnections = this._watchedSymbolsConfig.length * 2;
   }

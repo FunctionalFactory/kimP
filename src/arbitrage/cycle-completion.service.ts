@@ -65,6 +65,8 @@ export class CycleCompletionService {
       finalCycleData,
     );
 
+    this.cycleStateService.incrementCompletedCycleCount();
+
     this.cycleStateService.resetCycleState();
     this.logger.log(
       `Cycle ${cycleId} has been completed and state reset by CycleCompletionService.`,
