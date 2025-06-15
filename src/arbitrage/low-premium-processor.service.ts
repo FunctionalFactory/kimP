@@ -155,9 +155,9 @@ export class LowPremiumProcessorService {
           tradeDirection: 'LOW_PREMIUM_SELL_BINANCE',
         });
 
-        this.logger.log(
-          `[LPP_EVAL] ${watched.symbol.toUpperCase()}: NetProfitKRW: ${feeResult.netProfit.toFixed(0)} vs RequiredKRW: ${requiredProfitKrw.toFixed(0)}`,
-        );
+        // this.logger.log(
+        //   `[LPP_EVAL] ${watched.symbol.toUpperCase()}: NetProfitKRW: ${feeResult.netProfit.toFixed(0)} vs RequiredKRW: ${requiredProfitKrw.toFixed(0)}`,
+        // );
 
         // 최종 수정된 로직: 이 거래의 실제 손익(NetProfitKrw)이 사이클 목표를 위해
         // 감수 가능한 손익(RequiredKrw)보다 좋은지 여부만 확인합니다.
@@ -192,22 +192,48 @@ export class LowPremiumProcessorService {
       );
 
       try {
-        const randomSeconds = Math.floor(Math.random() * (60 - 60 + 1)) + 60;
-        this.logger.log(
-          `⬅️ [SIMULATE_LPP] 저프리미엄 ${bestLowPremiumOpportunity.symbol.toUpperCase()} 매수/송금 시작 (${(randomSeconds / 60).toFixed(1)}분 대기)`,
-        );
-        await new Promise((resolve) =>
-          setTimeout(resolve, randomSeconds * 1000),
-        );
+        // .env 파일의 UPBIT_MODE 설정을 가져옵니다. (저프리미엄은 업비트에서 시작)
+        const mode = this.configService.get<string>('UPBIT_MODE');
 
-        await this.strategyLowService.handleLowPremiumFlow(
-          bestLowPremiumOpportunity.symbol,
-          bestLowPremiumOpportunity.upbitPrice,
-          bestLowPremiumOpportunity.binancePrice,
-          bestLowPremiumOpportunity.rate,
-          activeCycleId,
-          lowPremiumInvestmentKRW,
-        );
+        if (mode === 'REAL') {
+          // ========== REAL 모드 실행 블록 ==========
+          this.logger.warn(
+            `[REAL-MODE] 🔄 [LOW_PREMIUM_START] ${bestLowPremiumOpportunity.symbol.toUpperCase()} 실제 거래 시작. (ID: ${activeCycleId})`,
+          );
+
+          // 시뮬레이션 시간 지연 없이, 실제 거래 흐름을 담당하는 서비스를 직접 호출합니다.
+          await this.strategyLowService.handleLowPremiumFlow(
+            bestLowPremiumOpportunity.symbol,
+            bestLowPremiumOpportunity.upbitPrice,
+            bestLowPremiumOpportunity.binancePrice,
+            bestLowPremiumOpportunity.rate,
+            activeCycleId,
+            lowPremiumInvestmentKRW,
+          );
+
+          this.logger.log(
+            `✅ [REAL-MODE] 저프리미엄 ${bestLowPremiumOpportunity.symbol.toUpperCase()} 모든 단계 처리 완료.`,
+          );
+        } else {
+          // ========== SIMULATION 모드 실행 블록 (기존 로직) ==========
+          const randomSeconds = Math.floor(Math.random() * (60 - 60 + 1)) + 60;
+          this.logger.log(
+            `⬅️ [SIMULATE_LPP] 저프리미엄 ${bestLowPremiumOpportunity.symbol.toUpperCase()} 매수/송금 시작 (${(randomSeconds / 60).toFixed(1)}분 대기)`,
+          );
+          await new Promise((resolve) =>
+            setTimeout(resolve, randomSeconds * 1000),
+          );
+
+          // 시뮬레이션 모드에서도 이 함수를 호출하는 것은 기존 로직과 동일
+          await this.strategyLowService.handleLowPremiumFlow(
+            bestLowPremiumOpportunity.symbol,
+            bestLowPremiumOpportunity.upbitPrice,
+            bestLowPremiumOpportunity.binancePrice,
+            bestLowPremiumOpportunity.rate,
+            activeCycleId,
+            lowPremiumInvestmentKRW,
+          );
+        }
 
         const finalCycleStatus =
           await this.arbitrageRecordService.getArbitrageCycle(activeCycleId);

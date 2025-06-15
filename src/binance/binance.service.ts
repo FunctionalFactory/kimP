@@ -36,7 +36,7 @@ export class BinanceService implements IExchange {
     }
   }
 
-  private getExchangeTicker(symbol: string): string {
+  public getExchangeTicker(symbol: string): string {
     const upperSymbol = symbol.toUpperCase();
     if (upperSymbol === 'BTT') {
       return 'BTTC';
@@ -134,9 +134,10 @@ export class BinanceService implements IExchange {
     amount?: number, // 시장가 매수 시에는 이 값을 사용하지 않을 수 있으므로 optional로 변경
     price?: number,
   ): Promise<Order> {
+    const exchangeTicker = this.getExchangeTicker(symbol); // ✨ 헬퍼 함수 호출 추가
     const endpoint = '/api/v3/order';
     const params: any = {
-      symbol: `${symbol.toUpperCase()}USDT`,
+      symbol: `${exchangeTicker.toUpperCase()}USDT`,
       side: side.toUpperCase(),
       type: type.toUpperCase(),
       timestamp: Date.now(),
@@ -174,6 +175,24 @@ export class BinanceService implements IExchange {
       const response = await axios.post(url, null, {
         headers: { 'X-MBX-APIKEY': this.apiKey },
       });
+      if (response.data.code) {
+        this.logger.error(
+          `[Binance-REAL] Order creation failed with soft error:`,
+          response.data,
+        );
+        throw new Error(
+          `Binance API Error: ${response.data.msg} (Code: ${response.data.code})`,
+        );
+      }
+      if (!response.data.orderId) {
+        this.logger.error(
+          '[Binance-REAL] API response did not contain an orderId.',
+          response.data,
+        );
+        throw new Error(
+          'Binance API did not return an orderId in the response.',
+        );
+      }
       return this.transformBinanceOrder(response.data);
     } catch (error) {
       const errorMessage = error.response?.data?.msg || error.message;
@@ -249,9 +268,9 @@ export class BinanceService implements IExchange {
       const response = await axios.get<any[]>(url, {
         headers: { 'X-MBX-APIKEY': this.apiKey },
       });
-
+      const exchangeTicker = this.getExchangeTicker(symbol).toUpperCase(); // ✨ 헬퍼 함수 호출 추가
       const targetCoin = response.data.find(
-        (c) => c.coin.toUpperCase() === symbol.toUpperCase(),
+        (c) => c.coin.toUpperCase() === exchangeTicker,
       );
 
       if (!targetCoin) {
@@ -373,8 +392,9 @@ export class BinanceService implements IExchange {
       const response = await axios.get<any[]>(url, {
         headers: { 'X-MBX-APIKEY': this.apiKey },
       });
+      const exchangeTicker = this.getExchangeTicker(symbol).toUpperCase(); // ✨ 헬퍼 함수 호출 추가
       const targetCoin = response.data.find(
-        (c) => c.coin.toUpperCase() === symbol.toUpperCase(),
+        (c) => c.coin.toUpperCase() === exchangeTicker,
       );
       if (!targetCoin) {
         throw new Error(`Could not find coin config for ${symbol}`);

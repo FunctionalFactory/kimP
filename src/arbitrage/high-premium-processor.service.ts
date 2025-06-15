@@ -1,15 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  ArbitrageCycleStateService,
-  CycleExecutionStatus,
-} from './arbitrage-cycle-state.service';
+import { ArbitrageCycleStateService } from './arbitrage-cycle-state.service';
 import { PortfolioLogService } from '../db/portfolio-log.service';
 import { ArbitrageRecordService } from '../db/arbitrage-record.service';
 import { ArbitrageService } from '../common/arbitrage.service';
 import { ArbitrageCycle } from '../db/entities/arbitrage-cycle.entity';
-import { PortfolioLog } from '../db/entities/portfolio-log.entity';
 import { ExchangeService } from 'src/common/exchange.service';
+import { StrategyHighService } from 'src/common/strategy-high.service';
 
 export interface HighPremiumConditionData {
   symbol: string;
@@ -34,6 +31,7 @@ export class HighPremiumProcessorService {
     private readonly arbitrageRecordService: ArbitrageRecordService,
     private readonly arbitrageService: ArbitrageService,
     private readonly exchangeService: ExchangeService,
+    private readonly strategyHighService: StrategyHighService,
   ) {
     this.TARGET_OVERALL_CYCLE_PROFIT_PERCENT =
       this.configService.get<number>('TARGET_OVERALL_CYCLE_PROFIT_PERCENT') ||
@@ -179,22 +177,48 @@ export class HighPremiumProcessorService {
         `✨ [HIGH_PREMIUM_START] ${data.symbol.toUpperCase()} ... 총 자본 ${highPremiumInvestmentKRW.toFixed(0)} KRW로 사이클 시작! (ID: ${this.cycleStateService.activeCycleId})`,
       );
 
-      const randomSeconds = Math.floor(Math.random() * (60 - 60 + 1)) + 60;
-      this.logger.log(
-        `➡️ [SIMULATE] 고프리미엄 ${data.symbol.toUpperCase()} 매수 및 송금 시작 (${(randomSeconds / 60).toFixed(1)}분 대기)`,
-      );
-      await new Promise((resolve) => setTimeout(resolve, randomSeconds * 1000));
+      const mode = this.configService.get<string>('BINANCE_MODE');
 
       // [수정된 부분] 새로운 객체를 만드는 대신, 필요한 모든 정보가 담긴 'data'를 그대로 전달합니다.
-      await this.arbitrageService.simulateArbitrage(
-        data,
-        this.cycleStateService.activeCycleId!,
-        highPremiumInvestmentUSDT,
-      );
+      if (mode === 'REAL') {
+        // ========== REAL 모드 실행 블록 ==========
+        this.logger.warn(
+          `[REAL-MODE] ✨ [HIGH_PREMIUM_START] ${data.symbol.toUpperCase()} 실제 거래 시작. (ID: ${this.cycleStateService.activeCycleId})`,
+        );
 
-      this.logger.log(
-        `✅ [SIMULATE] 고프리미엄 ${data.symbol.toUpperCase()} 매매/송금 시뮬레이션 완료.`,
-      );
+        // 실제 거래 흐름(매수->폴링->출금->폴링->매도->폴링)을 담당하는 서비스를 직접 호출합니다.
+        await this.strategyHighService.handleHighPremiumFlow(
+          data.symbol,
+          data.upbitPrice,
+          data.binancePrice,
+          data.rate,
+          this.cycleStateService.activeCycleId!,
+          highPremiumInvestmentUSDT,
+        );
+
+        this.logger.log(
+          `✅ [REAL-MODE] 고프리미엄 ${data.symbol.toUpperCase()} 모든 단계 처리 완료.`,
+        );
+      } else {
+        // ========== SIMULATION 모드 실행 블록 (기존 로직) ==========
+        const randomSeconds = Math.floor(Math.random() * (60 - 60 + 1)) + 60;
+        this.logger.log(
+          `➡️ [SIMULATE] 고프리미엄 ${data.symbol.toUpperCase()} 매수 및 송금 시작 (${(randomSeconds / 60).toFixed(1)}분 대기)`,
+        );
+        await new Promise((resolve) =>
+          setTimeout(resolve, randomSeconds * 1000),
+        );
+
+        await this.arbitrageService.simulateArbitrage(
+          data,
+          this.cycleStateService.activeCycleId!,
+          highPremiumInvestmentUSDT,
+        );
+
+        this.logger.log(
+          `✅ [SIMULATE] 고프리미엄 ${data.symbol.toUpperCase()} 매매/송금 시뮬레이션 완료.`,
+        );
+      }
 
       const highPremiumCompletedCycle =
         await this.arbitrageRecordService.getArbitrageCycle(

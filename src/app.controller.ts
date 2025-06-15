@@ -232,7 +232,6 @@ export class AppController {
         'upbit',
         coin,
       );
-      console.log(upbitDepositInfo);
       const binanceWithdrawalChance =
         await this.exchangeService.getWithdrawalChance('binance', coin);
       let returnWithdrawAmount = availableAmount - binanceWithdrawalChance.fee;

@@ -34,6 +34,20 @@ export class StrategyLowService {
     this.logger.log(`[STRATEGY_LOW] Starting REAL trade for cycle ${cycleId}`);
 
     try {
+      this.logger.log(
+        `[STRATEGY_LOW] 사전 점검: 업비트에서 사용 가능한 KRW 잔고를 확인합니다...`,
+      );
+      const upbitBalances = await this.exchangeService.getBalances('upbit');
+      const krwBalance =
+        upbitBalances.find((b) => b.currency === 'KRW')?.available || 0;
+
+      if (krwBalance < investmentKRW) {
+        throw new Error(
+          `업비트 KRW 잔고 부족. 필요 금액: ${investmentKRW.toFixed(0)}, 현재 잔고: ${krwBalance.toFixed(0)}`,
+        );
+      }
+      this.logger.log(`[STRATEGY_LOW] 잔고 확인 완료. 거래를 계속합니다.`);
+
       // 0. 사전 안전 점검
       const upbitWalletStatus = await this.exchangeService.getWalletStatus(
         'upbit',
@@ -56,10 +70,10 @@ export class StrategyLowService {
       const buyOrder = await this.exchangeService.createOrder(
         'upbit',
         symbol,
-        'limit',
+        'market',
         'buy',
-        buyAmount,
-        upbitPrice,
+        undefined,
+        investmentKRW,
       );
 
       const upbitMode = this.configService.get('UPBIT_MODE');

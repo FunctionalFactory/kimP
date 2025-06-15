@@ -4,6 +4,8 @@ import { ArbitrageRecordService } from '../db/arbitrage-record.service';
 import { ExchangeService, ExchangeType } from './exchange.service';
 import { Order } from './exchange.interface';
 import { ConfigService } from '@nestjs/config'; // ⭐️ ConfigService import 추가
+import axios from 'axios';
+import { BinanceService } from 'src/binance/binance.service'; // ◀️ import 추가
 
 // 유틸리티 함수: 지정된 시간(ms)만큼 대기
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -21,6 +23,7 @@ export class StrategyHighService {
     private readonly exchangeService: ExchangeService,
     private readonly arbitrageRecordService: ArbitrageRecordService,
     private readonly configService: ConfigService,
+    private readonly binanceService: BinanceService, // ◀️ 주입 추가
   ) {}
 
   async handleHighPremiumFlow(
@@ -58,13 +61,66 @@ export class StrategyHighService {
       // 1. 바이낸스 매수
       // TODO: getOrderBook으로 호가창 확인 후, 지정가(limit)로 주문 가격 결정
       const buyAmount = actualInvestmentUSDT / binancePrice;
+      const exchangeTickerForInfo =
+        this.binanceService.getExchangeTicker(symbol);
+      const market = `${exchangeTickerForInfo}USDT`;
+
+      // 바이낸스 거래 규칙(Exchange Info) 조회
+      this.logger.log(
+        `[STRATEGY_HIGH] 바이낸스 거래 규칙(stepSize) 조회를 위해 exchangeInfo를 호출합니다: ${market}`,
+      );
+      const exchangeInfoRes = await axios.get(
+        'https://api.binance.com/api/v3/exchangeInfo',
+      );
+      const symbolInfo = exchangeInfoRes.data.symbols.find(
+        (s: any) => s.symbol === market,
+      );
+
+      if (!symbolInfo) {
+        throw new Error(`Could not find exchange info for symbol ${market}`);
+      }
+
+      const lotSizeFilter = symbolInfo.filters.find(
+        (f: any) => f.filterType === 'LOT_SIZE',
+      );
+
+      if (!lotSizeFilter) {
+        throw new Error(`Could not find LOT_SIZE filter for ${market}`);
+      }
+
+      // stepSize에 맞춰 수량 정밀도 조정
+      const stepSize = parseFloat(lotSizeFilter.stepSize);
+      const adjustedBuyAmount = Math.floor(buyAmount / stepSize) * stepSize;
+
+      this.logger.log(
+        `[STRATEGY_HIGH] 수량 정밀도 조정: Raw: ${buyAmount} -> Adjusted: ${adjustedBuyAmount}`,
+      );
+
+      if (adjustedBuyAmount <= 0) {
+        throw new Error(
+          `조정된 매수 수량(${adjustedBuyAmount})이 0보다 작거나 같아 주문할 수 없습니다.`,
+        );
+      }
+
+      // 규칙에서 quoteAsset(USDT)의 허용 정밀도(소수점 자릿수)를 가져옵니다.
+      const quotePrecision = symbolInfo.quoteAssetPrecision;
+
+      // 투자할 총액(USDT)을 허용된 정밀도에 맞게 조정합니다.
+      const adjustedInvestmentUSDT = parseFloat(
+        actualInvestmentUSDT.toFixed(quotePrecision),
+      );
+
+      this.logger.log(
+        `[STRATEGY_HIGH] USDT 총액 정밀도 조정: Raw: ${actualInvestmentUSDT} -> Adjusted: ${adjustedInvestmentUSDT}`,
+      );
+
       const buyOrder = await this.exchangeService.createOrder(
         'binance',
         symbol,
-        'limit',
+        'market',
         'buy',
-        buyAmount,
-        binancePrice,
+        undefined,
+        adjustedInvestmentUSDT,
       );
 
       const binanceMode = this.configService.get('BINANCE_MODE');
@@ -78,6 +134,7 @@ export class StrategyHighService {
           cycleId,
           'binance',
           buyOrder.id,
+          symbol,
         );
       }
 
@@ -89,15 +146,63 @@ export class StrategyHighService {
         `[STRATEGY_HIGH] Binance buy order for ${symbol} filled.`,
       );
 
+      this.logger.log(
+        `[STRATEGY_HIGH] 교차 검증: 매수 후 실제 바이낸스 잔고를 확인합니다...`,
+      );
+      // 바이낸스 내부 시스템에 잔고가 반영될 때까지 아주 잠시(1~2초) 기다려줍니다.
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      const binanceBalances = await this.exchangeService.getBalances('binance');
+      const coinBalance =
+        binanceBalances.find((b) => b.currency === symbol.toUpperCase())
+          ?.available || 0;
+
+      // API 응답의 체결 수량과 실제 지갑의 보유 수량이 거의 일치하는지 확인합니다. (네트워크 수수료 등 감안 99.9%)
+      const successThreshold = 0.998; // 0.2%의 오차(수수료 등)를 허용
+      if (coinBalance < filledBuyOrder.filledAmount * successThreshold) {
+        throw new Error(
+          `매수 후 잔고 불일치. API 응답상 체결 수량: ${filledBuyOrder.filledAmount}, 실제 지갑 보유 수량: ${coinBalance}`,
+        );
+      }
+      this.logger.log(
+        `[STRATEGY_HIGH] 잔고 확인 완료. 실제 보유 수량: ${coinBalance} ${symbol.toUpperCase()}`,
+      );
+
       // 2. 업비트로 출금
       const { address: upbitAddress, tag: upbitTag } =
         await this.exchangeService.getDepositAddress('upbit', symbol);
+
+      this.logger.log(
+        `[STRATEGY_HIGH] 바이낸스에서 ${symbol.toUpperCase()} 출금 수수료를 조회합니다...`,
+      );
+      const withdrawalChance = await this.exchangeService.getWithdrawalChance(
+        'binance',
+        symbol,
+      );
+      const withdrawalFee = withdrawalChance.fee;
+      this.logger.log(
+        `[STRATEGY_HIGH] 조회된 출금 수수료: ${withdrawalFee} ${symbol.toUpperCase()}`,
+      );
+
+      const amountToWithdraw = coinBalance - withdrawalFee;
+
+      if (amountToWithdraw <= 0) {
+        throw new Error(
+          `보유 잔고(${coinBalance})가 출금 수수료(${withdrawalFee})보다 작거나 같아 출금할 수 없습니다.`,
+        );
+      }
+
+      // 출금 수량 또한 정밀도 조정이 필요할 수 있습니다. 여기서는 간단히 처리합니다.
+      const adjustedAmountToWithdraw = parseFloat(amountToWithdraw.toFixed(8));
+      this.logger.log(
+        `[STRATEGY_HIGH] 수수료 차감 후 실제 출금할 수량: ${adjustedAmountToWithdraw}`,
+      );
       // 실제 체결된 수량으로 출금 요청
       const withdrawalResult = await this.exchangeService.withdraw(
         'binance',
         symbol,
         upbitAddress,
-        filledBuyOrder.filledAmount.toString(),
+        adjustedAmountToWithdraw.toString(), // ◀️ 수수료를 제외한 금액으로 출금
         upbitTag,
       );
       await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
@@ -120,7 +225,7 @@ export class StrategyHighService {
           cycleId,
           'upbit',
           symbol,
-          filledBuyOrder.filledAmount,
+          adjustedAmountToWithdraw,
         );
       }
 
@@ -129,19 +234,38 @@ export class StrategyHighService {
       });
       this.logger.log(`[STRATEGY_HIGH] Deposit to Upbit confirmed.`);
 
+      this.logger.log(
+        `[STRATEGY_HIGH] 업비트에서 매도할 ${symbol}의 실제 잔고를 최종 확인합니다...`,
+      );
+      const upbitBalances = await this.exchangeService.getBalances('upbit');
+      const balanceToSell = upbitBalances.find(
+        (b) => b.currency === symbol.toUpperCase(),
+      );
+
+      if (!balanceToSell || balanceToSell.available <= 0) {
+        throw new Error(
+          `업비트에서 매도할 ${symbol} 잔고가 없습니다. (최종 확인 실패)`,
+        );
+      }
+      const amountToSell = balanceToSell.available;
+      this.logger.log(
+        `[STRATEGY_HIGH] 최종 확인된 전량 매도 수량: ${amountToSell} ${symbol}`,
+      );
+
       // 4. 업비트 매도
       const sellOrder = await this.exchangeService.createOrder(
         'upbit',
         symbol,
-        'limit',
+        'market',
         'sell',
-        filledBuyOrder.filledAmount,
-        upbitPrice,
+        amountToSell,
+        undefined,
       );
       const filledSellOrder = await this.pollOrderStatus(
         cycleId,
         'upbit',
         sellOrder.id,
+        symbol,
       );
 
       // 5. 최종 손익 계산 및 DB 업데이트
@@ -182,6 +306,7 @@ export class StrategyHighService {
     cycleId: string,
     exchange: ExchangeType,
     orderId: string,
+    symbol: string, // ◀️ symbol 파라미터 추가
   ): Promise<Order> {
     const startTime = Date.now();
     this.logger.log(
@@ -190,7 +315,11 @@ export class StrategyHighService {
 
     while (Date.now() - startTime < this.ORDER_TIMEOUT_MS) {
       try {
-        const order = await this.exchangeService.getOrder(exchange, orderId);
+        const order = await this.exchangeService.getOrder(
+          exchange,
+          orderId,
+          symbol,
+        ); // ◀️ symbol 전달
         if (order.status === 'filled') {
           this.logger.log(`[POLLING] Order ${orderId} filled.`);
           return order;
@@ -233,6 +362,13 @@ export class StrategyHighService {
         (b) => b.currency.toUpperCase() === symbol.toUpperCase(),
       )?.available || 0;
 
+    this.logger.log(
+      `[POLLING_DEBUG] Initial Balance for ${symbol}: ${initialBalance}`,
+    );
+    this.logger.log(
+      `[POLLING_DEBUG] Expected Amount to Arrive: ${expectedAmount}`,
+    );
+
     // 2. 잔고가 증가할 때까지 대기
     while (Date.now() - startTime < this.DEPOSIT_TIMEOUT_MS) {
       try {
@@ -242,6 +378,13 @@ export class StrategyHighService {
           currentBalances.find(
             (b) => b.currency.toUpperCase() === symbol.toUpperCase(),
           )?.available || 0;
+
+        const targetAmount = initialBalance + expectedAmount * 0.999;
+        const isDepositConfirmed = currentBalance >= targetAmount;
+
+        this.logger.log(
+          `[POLLING_DEBUG] Checking... | Current Balance: ${currentBalance} | Target: >= ${targetAmount.toFixed(8)} | Confirmed: ${isDepositConfirmed}`,
+        );
 
         // 출금 수수료 등을 감안하여, 예상 수량의 99.9% 이상만 들어오면 성공으로 간주
         if (currentBalance >= initialBalance + expectedAmount * 0.999) {

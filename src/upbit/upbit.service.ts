@@ -69,7 +69,6 @@ export class UpbitService implements IExchange {
       const response = await axios.get(url, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      console.log(response);
 
       // API 응답에서 net_types 배열을 추출합니다.
       const netTypes = response.data?.currency?.net_types || [];
@@ -235,7 +234,6 @@ export class UpbitService implements IExchange {
       const response = await axios.get<any[]>(url, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      console.log(response);
 
       const targetCurrency = response.data.find(
         (c) => c.currency.toUpperCase() === symbol.toUpperCase(),
@@ -308,7 +306,6 @@ export class UpbitService implements IExchange {
       const response = await axios.get(url, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      console.log(response);
       const data = response.data;
       if (!data.deposit_address) {
         throw new Error(

@@ -37,6 +37,6 @@ export const BINANCE_EXCHANGE_SERVICE = 'BINANCE_EXCHANGE_SERVICE';
     },
   ],
   // 다른 모듈에서 BINANCE_EXCHANGE_SERVICE를 사용할 수 있도록 export
-  exports: [BINANCE_EXCHANGE_SERVICE],
+  exports: [BINANCE_EXCHANGE_SERVICE, BinanceService],
 })
 export class BinanceModule {}
