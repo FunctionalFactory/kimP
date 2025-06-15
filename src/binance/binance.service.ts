@@ -24,6 +24,8 @@ export class BinanceService implements IExchange {
   private readonly serverUrl = 'https://api.binance.com';
 
   constructor(private readonly configService: ConfigService) {
+    this.logger.error('<<<<< BinanceService (REAL) IS LOADED >>>>>');
+
     this.apiKey = this.configService.get<string>('BINANCE_API_KEY');
     this.secretKey = this.configService.get<string>('BINANCE_SECRET_KEY');
 

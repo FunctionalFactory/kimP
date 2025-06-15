@@ -9,6 +9,7 @@ import { ArbitrageRecordService } from '../db/arbitrage-record.service';
 import { ArbitrageService } from '../common/arbitrage.service';
 import { ArbitrageCycle } from '../db/entities/arbitrage-cycle.entity';
 import { PortfolioLog } from '../db/entities/portfolio-log.entity';
+import { ExchangeService } from 'src/common/exchange.service';
 
 export interface HighPremiumConditionData {
   symbol: string;
@@ -32,6 +33,7 @@ export class HighPremiumProcessorService {
     private readonly portfolioLogService: PortfolioLogService,
     private readonly arbitrageRecordService: ArbitrageRecordService,
     private readonly arbitrageService: ArbitrageService,
+    private readonly exchangeService: ExchangeService,
   ) {
     this.TARGET_OVERALL_CYCLE_PROFIT_PERCENT =
       this.configService.get<number>('TARGET_OVERALL_CYCLE_PROFIT_PERCENT') ||
@@ -64,19 +66,61 @@ export class HighPremiumProcessorService {
         this.parseAndValidateNumber(latestPortfolioLog.total_balance_krw) ||
         this.INITIAL_CAPITAL_KRW;
     } else {
-      currentTotalKRWCapital = this.INITIAL_CAPITAL_KRW;
+      const mode = this.configService.get('BINANCE_MODE');
       this.logger.warn(
-        `No portfolio log, starting with initial capital: ${currentTotalKRWCapital.toFixed(0)} KRW`,
+        `No portfolio log found. Initializing portfolio in ${mode || 'REAL'} mode...`,
       );
-      latestPortfolioLog = await this.portfolioLogService.createLog({
-        timestamp: new Date(),
-        upbit_balance_krw: currentTotalKRWCapital,
-        binance_balance_krw: 0,
-        total_balance_krw: currentTotalKRWCapital,
-        cycle_pnl_krw: 0,
-        cycle_pnl_rate_percent: 0,
-        remarks: 'System Start: Initial capital set for High Premium.',
-      });
+
+      if (mode === 'SIMULATION') {
+        // --- 시뮬레이션 모드 로직 ---
+        currentTotalKRWCapital = this.INITIAL_CAPITAL_KRW;
+        this.logger.log(
+          `[SIMULATION] Starting with configured initial capital: ${currentTotalKRWCapital.toFixed(0)} KRW`,
+        );
+
+        latestPortfolioLog = await this.portfolioLogService.createLog({
+          timestamp: new Date(),
+          upbit_balance_krw: 0,
+          binance_balance_krw: currentTotalKRWCapital, // 시뮬레이션에서도 바이낸스에 자본이 있는 것으로 가정
+          total_balance_krw: currentTotalKRWCapital,
+          cycle_pnl_krw: 0,
+          cycle_pnl_rate_percent: 0,
+          remarks:
+            'System Start: Initial portfolio log created for SIMULATION mode.',
+        });
+      } else {
+        // --- 실전 모드 로직 ---
+        const binanceBalances =
+          await this.exchangeService.getBalances('binance');
+        const usdtBalance =
+          binanceBalances.find((b) => b.currency === 'USDT')?.available || 0;
+
+        const rate = this.exchangeService.getUSDTtoKRW();
+        if (usdtBalance <= 0 || rate <= 0) {
+          throw new Error(
+            `Cannot initialize portfolio for REAL mode. Binance USDT balance is ${usdtBalance} or rate is ${rate}.`,
+          );
+        }
+
+        const initialBinanceKrw = usdtBalance * rate;
+        currentTotalKRWCapital = initialBinanceKrw;
+
+        this.logger.log(
+          `[REAL] Initial portfolio value calculated: ${currentTotalKRWCapital.toFixed(
+            0,
+          )} KRW (from ${usdtBalance.toFixed(2)} USDT)`,
+        );
+        latestPortfolioLog = await this.portfolioLogService.createLog({
+          timestamp: new Date(),
+          upbit_balance_krw: 0,
+          binance_balance_krw: currentTotalKRWCapital,
+          total_balance_krw: currentTotalKRWCapital,
+          cycle_pnl_krw: 0,
+          cycle_pnl_rate_percent: 0,
+          remarks:
+            'System Start: Initial portfolio log created from REAL Binance balance.',
+        });
+      }
     }
 
     if (currentTotalKRWCapital <= 0) {

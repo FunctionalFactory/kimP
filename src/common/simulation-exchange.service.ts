@@ -20,6 +20,10 @@ export class SimulationExchangeService implements IExchange, OnModuleInit {
 
   private simulatedOrders = new Map<string, Order>(); // 생성된 주문을 저장할 Map
 
+  constructor() {
+    this.logger.error('<<<<< SimulationExchangeService IS LOADED >>>>>');
+  }
+
   onModuleInit() {
     this.logger.log('SimulationExchangeService has been initialized.');
     // 초기 잔고 설정

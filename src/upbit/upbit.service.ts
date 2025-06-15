@@ -25,6 +25,8 @@ export class UpbitService implements IExchange {
   private readonly serverUrl = 'https://api.upbit.com';
 
   constructor(private readonly configService: ConfigService) {
+    this.logger.error('<<<<< UpbitService (REAL) IS LOADED >>>>>');
+
     this.accessKey = this.configService.get<string>('UPBIT_ACCESS_KEY');
     this.secretKey = this.configService.get<string>('UPBIT_SECRET_KEY');
     if (!this.accessKey || !this.secretKey) {
