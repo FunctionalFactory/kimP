@@ -13,6 +13,7 @@ import {
   OrderType,
   WalletStatus,
   WithdrawalChance,
+  TickerInfo,
 } from './exchange.interface';
 
 // 이 서비스에 요청할 때 사용할 거래소 타입
@@ -149,5 +150,27 @@ export class ExchangeService {
     symbol: string,
   ): Promise<WithdrawalChance> {
     return this.getService(exchange).getWithdrawalChance(symbol);
+  }
+
+  async getTickerInfo(
+    exchange: ExchangeType,
+    symbol: string,
+  ): Promise<TickerInfo> {
+    return this.getService(exchange).getTickerInfo(symbol);
+  }
+
+  /**
+   * 특정 주문을 취소합니다.
+   * @param exchange 거래소 타입 ('upbit' 또는 'binance')
+   * @param orderId 취소할 주문의 ID
+   * @param symbol (선택적) 일부 거래소에서 필요
+   * @returns 취소 요청 결과
+   */
+  async cancelOrder(
+    exchange: ExchangeType,
+    orderId: string,
+    symbol?: string,
+  ): Promise<any> {
+    return this.getService(exchange).cancelOrder(orderId, symbol);
   }
 }

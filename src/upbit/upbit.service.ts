@@ -9,6 +9,8 @@ import {
   WalletStatus,
   OrderStatus,
   WithdrawalChance,
+  OrderBookLevel,
+  TickerInfo,
 } from '../common/exchange.interface';
 import { ConfigService } from '@nestjs/config';
 import { sign } from 'jsonwebtoken';
@@ -441,6 +443,91 @@ export class UpbitService implements IExchange {
 
   // --- 이하 미구현 메소드들 ---
   async getOrderBook(symbol: string): Promise<OrderBook> {
-    throw new Error('Not implemented');
+    const market = `KRW-${symbol.toUpperCase()}`;
+    const url = `${this.serverUrl}/v1/orderbook?markets=${market}`;
+
+    try {
+      // 업비트 API는 인증이 필요 없습니다.
+      const response = await axios.get(url);
+      const data = response.data[0]; // 배열의 첫 번째 요소가 해당 마켓의 오더북입니다.
+
+      if (!data) {
+        throw new Error(`No order book data returned for market ${market}`);
+      }
+
+      // 업비트 응답(orderbook_units)을 표준 OrderBook 형태로 변환합니다.
+      const bids: OrderBookLevel[] = data.orderbook_units.map((unit: any) => ({
+        price: unit.bid_price,
+        amount: unit.bid_size,
+      }));
+
+      const asks: OrderBookLevel[] = data.orderbook_units.map((unit: any) => ({
+        price: unit.ask_price,
+        amount: unit.ask_size,
+      }));
+
+      return {
+        symbol: data.market,
+        bids,
+        asks,
+        timestamp: new Date(data.timestamp),
+      };
+    } catch (error) {
+      const errorMessage =
+        error.response?.data?.error?.message || error.message;
+      this.logger.error(
+        `[Upbit-REAL] Failed to get order book for ${symbol}: ${errorMessage}`,
+      );
+      throw new Error(`Upbit API Error: ${errorMessage}`);
+    }
+  }
+
+  async getTickerInfo(symbol: string): Promise<TickerInfo> {
+    const market = `KRW-${symbol.toUpperCase()}`;
+    const url = `${this.serverUrl}/v1/ticker?markets=${market}`;
+
+    try {
+      const response = await axios.get(url);
+      const data = response.data[0];
+
+      if (!data) {
+        throw new Error(`No ticker data returned for market ${market}`);
+      }
+
+      return {
+        symbol: data.market,
+        quoteVolume: data.acc_trade_price_24h, // 업비트는 'acc_trade_price_24h'가 24시간 누적 거래대금(KRW)
+      };
+    } catch (error) {
+      const errorMessage =
+        error.response?.data?.error?.message || error.message;
+      this.logger.error(
+        `[Upbit-REAL] Failed to get ticker info for ${symbol}: ${errorMessage}`,
+      );
+      throw new Error(`Upbit API Error: ${errorMessage}`);
+    }
+  }
+
+  async cancelOrder(orderId: string, symbol?: string): Promise<any> {
+    const params = { uuid: orderId };
+    const token = this.generateToken(params);
+    const url = `${this.serverUrl}/v1/order?${querystring.encode(params)}`;
+
+    try {
+      const response = await axios.delete(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      this.logger.log(
+        `[Upbit-REAL] Order ${orderId} cancellation requested successfully.`,
+      );
+      return response.data;
+    } catch (error) {
+      const errorMessage =
+        error.response?.data?.error?.message || error.message;
+      this.logger.error(
+        `[Upbit-REAL] Failed to cancel order ${orderId}: ${errorMessage}`,
+      );
+      throw new Error(`Upbit API Error: ${errorMessage}`);
+    }
   }
 }

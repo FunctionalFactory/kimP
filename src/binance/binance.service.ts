@@ -10,6 +10,8 @@ import {
   WalletStatus,
   OrderStatus,
   WithdrawalChance,
+  OrderBookLevel,
+  TickerInfo,
 } from '../common/exchange.interface';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
@@ -432,6 +434,87 @@ export class BinanceService implements IExchange {
   // --- 이하 메소드들은 아직 구현되지 않았습니다 ---
 
   async getOrderBook(symbol: string): Promise<OrderBook> {
-    throw new Error('Binance getOrderBook not implemented.');
+    const endpoint = '/api/v3/depth';
+    const exchangeTicker = this.getExchangeTicker(symbol).toUpperCase();
+    const url = `${this.serverUrl}${endpoint}?symbol=${exchangeTicker}USDT&limit=20`;
+
+    try {
+      const response = await axios.get(url);
+      const data = response.data;
+
+      // 바이낸스 응답을 표준 OrderBook 형태로 변환
+      const bids: OrderBookLevel[] = data.bids.map((b: [string, string]) => ({
+        price: parseFloat(b[0]),
+        amount: parseFloat(b[1]),
+      }));
+
+      const asks: OrderBookLevel[] = data.asks.map((a: [string, string]) => ({
+        price: parseFloat(a[0]),
+        amount: parseFloat(a[1]),
+      }));
+
+      return {
+        symbol: `${exchangeTicker}USDT`,
+        bids,
+        asks,
+        timestamp: new Date(), // 바이낸스는 별도 타임스탬프를 안주므로 현재 시각 사용
+      };
+    } catch (error) {
+      const errorMessage = error.response?.data?.msg || error.message;
+      this.logger.error(
+        `[Binance-REAL] Failed to get order book for ${symbol}: ${errorMessage}`,
+      );
+      throw new Error(`Binance API Error: ${errorMessage}`);
+    }
+  }
+
+  async getTickerInfo(symbol: string): Promise<TickerInfo> {
+    const endpoint = '/api/v3/ticker/24hr';
+    const exchangeTicker = this.getExchangeTicker(symbol).toUpperCase();
+    const url = `${this.serverUrl}${endpoint}?symbol=${exchangeTicker}USDT`;
+
+    try {
+      const response = await axios.get(url);
+      const data = response.data;
+
+      return {
+        symbol: data.symbol,
+        quoteVolume: parseFloat(data.quoteVolume), // 바이낸스는 'quoteVolume'이 24시간 누적 거래대금(USDT)
+      };
+    } catch (error) {
+      const errorMessage = error.response?.data?.msg || error.message;
+      this.logger.error(
+        `[Binance-REAL] Failed to get ticker info for ${symbol}: ${errorMessage}`,
+      );
+      throw new Error(`Binance API Error: ${errorMessage}`);
+    }
+  }
+
+  async cancelOrder(orderId: string, symbol: string): Promise<any> {
+    const endpoint = '/api/v3/order';
+    const params = {
+      symbol: `${this.getExchangeTicker(symbol).toUpperCase()}USDT`,
+      orderId: orderId,
+      timestamp: Date.now(),
+    };
+    const queryString = querystring.stringify(params);
+    const signature = this._generateSignature(queryString);
+    const url = `${this.serverUrl}${endpoint}?${queryString}&signature=${signature}`;
+
+    try {
+      const response = await axios.delete(url, {
+        headers: { 'X-MBX-APIKEY': this.apiKey },
+      });
+      this.logger.log(
+        `[Binance-REAL] Order ${orderId} for ${symbol} cancellation requested successfully.`,
+      );
+      return response.data;
+    } catch (error) {
+      const errorMessage = error.response?.data?.msg || error.message;
+      this.logger.error(
+        `[Binance-REAL] Failed to cancel order ${orderId}: ${errorMessage}`,
+      );
+      throw new Error(`Binance API Error: ${errorMessage}`);
+    }
   }
 }

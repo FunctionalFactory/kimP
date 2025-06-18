@@ -24,6 +24,14 @@ export type OrderType = 'limit' | 'market';
 export type OrderSide = 'buy' | 'sell';
 
 /**
+ * 거래 수수료 정보를 담는 인터페이스
+ */
+export interface TradeFeeInfo {
+  makerCommission: number; // 지정가 거래 수수료율 (e.g., 0.001 for 0.1%)
+  takerCommission: number; // 시장가 거래 수수료율
+}
+
+/**
  * 출금 가능 정보를 담는 인터페이스
  */
 export interface WithdrawalChance {
@@ -68,6 +76,14 @@ export interface Balance {
 export interface OrderBookLevel {
   price: number; // 가격
   amount: number; // 수량
+}
+
+/**
+ * 24시간 티커 정보를 담는 인터페이스
+ */
+export interface TickerInfo {
+  symbol: string;
+  quoteVolume: number; // 24시간 누적 거래대금 (Quote Asset 기준, KRW 또는 USDT)
 }
 
 /**
@@ -170,4 +186,19 @@ export interface IExchange {
    * @returns 출금 가능 정보
    */
   getWithdrawalChance(symbol: string): Promise<WithdrawalChance>;
+
+  /**
+   * 특정 주문을 취소합니다.
+   * @param orderId 취소할 주문의 ID
+   * @param symbol (선택적) 일부 거래소에서 필요
+   * @returns 취소 요청 결과
+   */
+  cancelOrder(orderId: string, symbol?: string): Promise<any>;
+
+  /**
+   * 특정 코인의 24시간 티커 정보를 조회합니다.
+   * @param symbol 조회할 코인 심볼
+   * @returns 티커 정보
+   */
+  getTickerInfo(symbol: string): Promise<TickerInfo>;
 }

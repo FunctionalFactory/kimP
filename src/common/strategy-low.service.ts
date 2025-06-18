@@ -2,7 +2,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ArbitrageRecordService } from '../db/arbitrage-record.service';
 import { ExchangeService, ExchangeType } from './exchange.service';
-import { Order } from './exchange.interface';
+import { Order, OrderSide } from './exchange.interface';
 import { ConfigService } from '@nestjs/config'; // ⭐️ ConfigService import 추가
 
 // 유틸리티 함수: 지정된 시간(ms)만큼 대기
@@ -14,8 +14,11 @@ export class StrategyLowService {
 
   // 폴링 관련 설정
   private readonly POLLING_INTERVAL_MS = 3000; // 3초
-  private readonly ORDER_TIMEOUT_MS = 180000; // 3분
   private readonly DEPOSIT_TIMEOUT_MS = 600000; // 10분
+
+  private readonly ORDER_RETRY_LIMIT = 3; // 최대 재주문 횟수
+  private readonly ORDER_POLL_TIMEOUT_MS = 30000; // 각 주문의 폴링 타임아웃 (30초)
+  private readonly PRICE_ADJUSTMENT_FACTOR = 0.0005; // 가격 조정 비율 (0.05%)
 
   constructor(
     private readonly exchangeService: ExchangeService,
@@ -70,10 +73,10 @@ export class StrategyLowService {
       const buyOrder = await this.exchangeService.createOrder(
         'upbit',
         symbol,
-        'market',
+        'limit',
         'buy',
-        undefined,
-        investmentKRW,
+        buyAmount,
+        upbitPrice,
       );
 
       const upbitMode = this.configService.get('UPBIT_MODE');
@@ -87,6 +90,10 @@ export class StrategyLowService {
           cycleId,
           'upbit',
           buyOrder.id,
+          symbol,
+          upbitPrice,
+          'buy',
+          buyAmount,
         );
       }
 
@@ -99,12 +106,17 @@ export class StrategyLowService {
       // 2. 바이낸스로 출금
       const { address: binanceAddress, tag: binanceTag } =
         await this.exchangeService.getDepositAddress('binance', symbol);
+
+      const { net_type: upbitNetType } =
+        await this.exchangeService.getDepositAddress('upbit', symbol);
+
       const withdrawalResult = await this.exchangeService.withdraw(
         'upbit',
         symbol,
         binanceAddress,
         filledBuyOrder.filledAmount.toString(),
         binanceTag,
+        upbitNetType,
       );
       await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
         status: 'LP_WITHDRAWN',
@@ -135,18 +147,23 @@ export class StrategyLowService {
       this.logger.log(`[STRATEGY_LOW] Deposit to Binance confirmed.`);
 
       // 4. 바이낸스 매도
+      const sellAmount = filledBuyOrder.filledAmount; // 판매할 수량
       const sellOrder = await this.exchangeService.createOrder(
         'binance',
         symbol,
         'limit',
         'sell',
-        filledBuyOrder.filledAmount,
+        sellAmount,
         binancePrice,
       );
       const filledSellOrder = await this.pollOrderStatus(
         cycleId,
         'binance',
         sellOrder.id,
+        symbol,
+        binancePrice,
+        'sell',
+        sellAmount,
       );
       await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
         status: 'LP_SOLD',
@@ -197,30 +214,98 @@ export class StrategyLowService {
   }
 
   // 주문 체결 폴링 로직
+  // 주문 체결 폴링 로직을 '호가 추적' 기능이 포함된 새 로직으로 교체
   private async pollOrderStatus(
     cycleId: string,
     exchange: ExchangeType,
-    orderId: string,
+    initialOrderId: string,
+    symbol: string,
+    initialPrice: number,
+    side: OrderSide,
+    amount: number,
   ): Promise<Order> {
-    const startTime = Date.now();
-    this.logger.log(
-      `[POLLING] Start polling for order ${orderId} on ${exchange}. Timeout: ${this.ORDER_TIMEOUT_MS}ms`,
-    );
+    let currentOrderId = initialOrderId;
+    let currentPrice = initialPrice;
 
-    while (Date.now() - startTime < this.ORDER_TIMEOUT_MS) {
-      const order = await this.exchangeService.getOrder(exchange, orderId);
-      if (order.status === 'filled') {
-        this.logger.log(`[POLLING] Order ${orderId} filled.`);
-        return order;
+    for (let attempt = 1; attempt <= this.ORDER_RETRY_LIMIT; attempt++) {
+      const startTime = Date.now();
+      this.logger.log(
+        `[POLLING ATTEMPT #${attempt}] Start polling for order ${currentOrderId}. Price: ${currentPrice}`,
+      );
+
+      while (Date.now() - startTime < this.ORDER_POLL_TIMEOUT_MS) {
+        try {
+          const order = await this.exchangeService.getOrder(
+            exchange,
+            currentOrderId,
+            symbol,
+          );
+          if (order.status === 'filled') {
+            this.logger.log(
+              `[POLLING] Order ${currentOrderId} filled on attempt #${attempt}.`,
+            );
+            return order;
+          }
+          if (order.status === 'canceled') {
+            throw new Error(`Order ${currentOrderId} was canceled.`);
+          }
+          await delay(this.POLLING_INTERVAL_MS);
+        } catch (e) {
+          this.logger.warn(
+            `[POLLING] Error polling order ${currentOrderId}: ${e.message}. Retrying...`,
+          );
+          await delay(this.POLLING_INTERVAL_MS);
+        }
       }
-      if (order.status === 'canceled') {
-        throw new Error(`Order ${orderId} was canceled.`);
+
+      if (attempt < this.ORDER_RETRY_LIMIT) {
+        this.logger.warn(
+          `[RETRY] Order ${currentOrderId} timed out. Canceling and re-submitting...`,
+        );
+        try {
+          await this.exchangeService.cancelOrder(
+            exchange,
+            currentOrderId,
+            symbol,
+          );
+          currentPrice =
+            side === 'buy'
+              ? currentPrice * (1 + this.PRICE_ADJUSTMENT_FACTOR)
+              : currentPrice * (1 - this.PRICE_ADJUSTMENT_FACTOR);
+
+          const newOrder = await this.exchangeService.createOrder(
+            exchange,
+            symbol,
+            'limit',
+            side,
+            amount,
+            currentPrice,
+          );
+          currentOrderId = newOrder.id;
+          this.logger.log(
+            `[RETRY] New order ${currentOrderId} placed at new price ${currentPrice}.`,
+          );
+        } catch (error) {
+          this.logger.error(
+            `[RETRY] Failed to cancel or re-submit order: ${error.message}`,
+          );
+          throw error;
+        }
       }
-      await delay(this.POLLING_INTERVAL_MS);
     }
-    throw new Error(
-      `Polling for order ${orderId} timed out after ${this.ORDER_TIMEOUT_MS}ms.`,
+
+    this.logger.error(
+      `[FINAL TIMEOUT] Order failed to fill after ${this.ORDER_RETRY_LIMIT} attempts. Canceling final order ${currentOrderId}.`,
     );
+    try {
+      await this.exchangeService.cancelOrder(exchange, currentOrderId, symbol);
+    } catch (finalCancelError) {
+      this.logger.error(
+        `[FINAL TIMEOUT] CRITICAL: Failed to cancel final order ${currentOrderId}: ${finalCancelError.message}`,
+      );
+    }
+
+    throw new Error(`Order for ${symbol} failed to fill after all retries.`);
   }
 
   // 입금 확인 폴링 로직

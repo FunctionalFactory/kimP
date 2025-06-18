@@ -7,6 +7,7 @@ import { ArbitrageService } from '../common/arbitrage.service';
 import { ArbitrageCycle } from '../db/entities/arbitrage-cycle.entity';
 import { ExchangeService } from 'src/common/exchange.service';
 import { StrategyHighService } from 'src/common/strategy-high.service';
+import { SlippageCalculatorService } from 'src/common/slippage-calculator.service';
 
 export interface HighPremiumConditionData {
   symbol: string;
@@ -23,6 +24,7 @@ export class HighPremiumProcessorService {
 
   private readonly TARGET_OVERALL_CYCLE_PROFIT_PERCENT: number;
   private readonly INITIAL_CAPITAL_KRW: number;
+  private readonly MINIMUM_VOLUME_KRW = 10000000000; // 최소 거래대금 100억 원
 
   constructor(
     private readonly configService: ConfigService,
@@ -32,6 +34,7 @@ export class HighPremiumProcessorService {
     private readonly arbitrageService: ArbitrageService,
     private readonly exchangeService: ExchangeService,
     private readonly strategyHighService: StrategyHighService,
+    private readonly slippageCalculatorService: SlippageCalculatorService, // ⭐️ 주입 추가
   ) {
     this.TARGET_OVERALL_CYCLE_PROFIT_PERCENT =
       this.configService.get<number>('TARGET_OVERALL_CYCLE_PROFIT_PERCENT') ||
@@ -146,6 +149,66 @@ export class HighPremiumProcessorService {
     const highPremiumInitialRate = data.rate;
     const highPremiumInvestmentUSDT =
       highPremiumInvestmentKRW / highPremiumInitialRate;
+
+    // 1-B. 유동성 필터 로직 적용
+    try {
+      const upbitTickerInfo = await this.exchangeService.getTickerInfo(
+        'upbit',
+        data.symbol,
+      );
+      const upbitVolume24h = upbitTickerInfo.quoteVolume;
+
+      if (upbitVolume24h < this.MINIMUM_VOLUME_KRW) {
+        this.logger.log(
+          `[FILTERED] Skipped ${data.symbol} due to low trading volume: ${(upbitVolume24h / 100000000).toFixed(2)}억 KRW`,
+        );
+        return { success: false, nextStep: 'failed' }; // 거래를 시작하지 않고 종료
+      }
+      this.logger.verbose(`[PASSED] ${data.symbol} passed volume check.`);
+    } catch (error) {
+      this.logger.error(
+        `[FILTER] Failed to get ticker info for volume check: ${error.message}`,
+      );
+      return { success: false, nextStep: 'failed' }; // 티커 정보 조회 실패 시에도 안전하게 종료
+    }
+
+    // 2단계: 오더북 기반 슬리피지 필터
+    try {
+      // 2-A. 오더북 조회
+      const orderBook = await this.exchangeService.getOrderBook(
+        'binance',
+        data.symbol,
+      );
+
+      // 2-B. 슬리피지 계산
+      const slippageResult = this.slippageCalculatorService.calculate(
+        orderBook,
+        'buy',
+        highPremiumInvestmentUSDT,
+      );
+
+      this.logger.verbose(
+        `[SLIPPAGE_CHECK] ${data.symbol}: Expected slippage ${slippageResult.slippagePercent.toFixed(4)}%`,
+      );
+
+      // 2-C. 슬리피지가 수익률을 잠식하는지 확인
+      const expectedProfitAfterSlippage =
+        data.netProfitPercent - slippageResult.slippagePercent;
+      const MIN_PROFIT_THRESHOLD = 0.2; // 슬리피지를 감안한 최소 목표 수익률
+
+      if (expectedProfitAfterSlippage < MIN_PROFIT_THRESHOLD) {
+        this.logger.log(
+          `[FILTERED] Skipped ${data.symbol} due to high slippage. Expected PNL after slippage: ${expectedProfitAfterSlippage.toFixed(2)}%`,
+        );
+        return { success: false, nextStep: 'failed' };
+      }
+    } catch (error) {
+      this.logger.error(
+        `[FILTER] Failed to check slippage for ${data.symbol}: ${error.message}`,
+      );
+      return { success: false, nextStep: 'failed' };
+    }
+
     let tempCycleIdRecord: ArbitrageCycle | null = null;
 
     try {

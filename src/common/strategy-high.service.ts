@@ -2,7 +2,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ArbitrageRecordService } from '../db/arbitrage-record.service';
 import { ExchangeService, ExchangeType } from './exchange.service';
-import { Order } from './exchange.interface';
+import { Order, OrderSide } from './exchange.interface';
 import { ConfigService } from '@nestjs/config'; // ⭐️ ConfigService import 추가
 import axios from 'axios';
 import { BinanceService } from 'src/binance/binance.service'; // ◀️ import 추가
@@ -16,8 +16,10 @@ export class StrategyHighService {
 
   // 폴링 관련 설정 (나중에 .env로 옮기는 것을 추천)
   private readonly POLLING_INTERVAL_MS = 3000; // 3초
-  private readonly ORDER_TIMEOUT_MS = 180000; // 3분
   private readonly DEPOSIT_TIMEOUT_MS = 600000; // 10분
+  private readonly ORDER_RETRY_LIMIT = 3; // 최대 재주문 횟수
+  private readonly ORDER_POLL_TIMEOUT_MS = 30000; // 각 주문의 폴링 타임아웃 (30초)
+  private readonly PRICE_ADJUSTMENT_FACTOR = 0.0005; // 가격 조정 비율 (0.05%)
 
   constructor(
     private readonly exchangeService: ExchangeService,
@@ -60,7 +62,6 @@ export class StrategyHighService {
 
       // 1. 바이낸스 매수
       // TODO: getOrderBook으로 호가창 확인 후, 지정가(limit)로 주문 가격 결정
-      const buyAmount = actualInvestmentUSDT / binancePrice;
       const exchangeTickerForInfo =
         this.binanceService.getExchangeTicker(symbol);
       const market = `${exchangeTickerForInfo}USDT`;
@@ -88,6 +89,16 @@ export class StrategyHighService {
         throw new Error(`Could not find LOT_SIZE filter for ${market}`);
       }
 
+      // 규칙에서 quoteAsset(USDT)의 허용 정밀도(소수점 자릿수)를 가져옵니다.
+      const quotePrecision = symbolInfo.quoteAssetPrecision;
+
+      // 투자할 총액(USDT)을 허용된 정밀도에 맞게 조정합니다.
+      const adjustedInvestmentUSDT = parseFloat(
+        actualInvestmentUSDT.toFixed(quotePrecision),
+      );
+
+      const buyAmount = adjustedInvestmentUSDT / binancePrice;
+
       // stepSize에 맞춰 수량 정밀도 조정
       const stepSize = parseFloat(lotSizeFilter.stepSize);
       const adjustedBuyAmount = Math.floor(buyAmount / stepSize) * stepSize;
@@ -102,25 +113,17 @@ export class StrategyHighService {
         );
       }
 
-      // 규칙에서 quoteAsset(USDT)의 허용 정밀도(소수점 자릿수)를 가져옵니다.
-      const quotePrecision = symbolInfo.quoteAssetPrecision;
-
-      // 투자할 총액(USDT)을 허용된 정밀도에 맞게 조정합니다.
-      const adjustedInvestmentUSDT = parseFloat(
-        actualInvestmentUSDT.toFixed(quotePrecision),
-      );
-
       this.logger.log(
-        `[STRATEGY_HIGH] USDT 총액 정밀도 조정: Raw: ${actualInvestmentUSDT} -> Adjusted: ${adjustedInvestmentUSDT}`,
+        `[STRATEGY_HIGH] Placing LIMIT buy order for ${adjustedBuyAmount} ${symbol} at ${binancePrice} USDT`,
       );
 
       const buyOrder = await this.exchangeService.createOrder(
         'binance',
         symbol,
-        'market',
+        'limit',
         'buy',
-        undefined,
-        adjustedInvestmentUSDT,
+        adjustedBuyAmount,
+        binancePrice,
       );
 
       const binanceMode = this.configService.get('BINANCE_MODE');
@@ -135,6 +138,9 @@ export class StrategyHighService {
           'binance',
           buyOrder.id,
           symbol,
+          binancePrice, // 초기 가격 전달
+          'buy', // 주문 방향 전달
+          adjustedBuyAmount, // 재주문 시 사용할 수량 전달
         );
       }
 
@@ -256,16 +262,19 @@ export class StrategyHighService {
       const sellOrder = await this.exchangeService.createOrder(
         'upbit',
         symbol,
-        'market',
+        'limit',
         'sell',
         amountToSell,
-        undefined,
+        upbitPrice,
       );
       const filledSellOrder = await this.pollOrderStatus(
         cycleId,
         'upbit',
         sellOrder.id,
         symbol,
+        upbitPrice, // 초기 가격 전달
+        'sell', // 주문 방향 전달
+        amountToSell, // 재주문 시 사용할 수량 전달
       );
 
       // 5. 최종 손익 계산 및 DB 업데이트
@@ -305,40 +314,98 @@ export class StrategyHighService {
   private async pollOrderStatus(
     cycleId: string,
     exchange: ExchangeType,
-    orderId: string,
-    symbol: string, // ◀️ symbol 파라미터 추가
+    initialOrderId: string,
+    symbol: string,
+    initialPrice: number, // ⭐️ 추적을 위해 초기 가격을 받습니다.
+    side: OrderSide, // ⭐️ 매수/매도에 따라 가격 조정을 위해 side를 받습니다.
+    amount: number, // ⭐️ 재주문 시 사용할 수량을 받습니다.
   ): Promise<Order> {
-    const startTime = Date.now();
-    this.logger.log(
-      `[POLLING] Start polling for order ${orderId} on ${exchange}. Timeout: ${this.ORDER_TIMEOUT_MS}ms`,
-    );
+    let currentOrderId = initialOrderId;
+    let currentPrice = initialPrice;
 
-    while (Date.now() - startTime < this.ORDER_TIMEOUT_MS) {
-      try {
-        const order = await this.exchangeService.getOrder(
-          exchange,
-          orderId,
-          symbol,
-        ); // ◀️ symbol 전달
-        if (order.status === 'filled') {
-          this.logger.log(`[POLLING] Order ${orderId} filled.`);
-          return order;
+    for (let attempt = 1; attempt <= this.ORDER_RETRY_LIMIT; attempt++) {
+      const startTime = Date.now();
+      this.logger.log(
+        `[POLLING ATTEMPT #${attempt}] Start polling for order ${currentOrderId}. Price: ${currentPrice}`,
+      );
+
+      while (Date.now() - startTime < this.ORDER_POLL_TIMEOUT_MS) {
+        try {
+          const order = await this.exchangeService.getOrder(
+            exchange,
+            currentOrderId,
+            symbol,
+          );
+          if (order.status === 'filled') {
+            this.logger.log(
+              `[POLLING] Order ${currentOrderId} filled on attempt ${attempt}.`,
+            );
+            return order;
+          }
+          if (order.status === 'canceled') {
+            throw new Error(`Order ${currentOrderId} was canceled.`);
+          }
+          await delay(this.POLLING_INTERVAL_MS);
+        } catch (e) {
+          this.logger.warn(
+            `[POLLING] Error polling order ${currentOrderId}: ${e.message}. Retrying...`,
+          );
+          await delay(this.POLLING_INTERVAL_MS);
         }
-        if (order.status === 'canceled') {
-          throw new Error(`Order ${orderId} was canceled.`);
-        }
-        // 미체결 상태면 잠시 대기 후 다시 시도
-        await delay(this.POLLING_INTERVAL_MS);
-      } catch (e) {
+      }
+
+      // --- 타임아웃 발생: 주문 취소 및 가격 조정 후 재주문 ---
+      if (attempt < this.ORDER_RETRY_LIMIT) {
         this.logger.warn(
-          `[POLLING] Error while polling order ${orderId}: ${e.message}. Retrying...`,
+          `[RETRY] Order ${currentOrderId} timed out. Canceling and re-submitting...`,
         );
-        await delay(this.POLLING_INTERVAL_MS);
+
+        try {
+          await this.exchangeService.cancelOrder(
+            exchange,
+            currentOrderId,
+            symbol,
+          );
+
+          // 가격 조정: 매수는 가격을 올리고, 매도는 가격을 내림
+          currentPrice =
+            side === 'buy'
+              ? currentPrice * (1 + this.PRICE_ADJUSTMENT_FACTOR)
+              : currentPrice * (1 - this.PRICE_ADJUSTMENT_FACTOR);
+
+          const newOrder = await this.exchangeService.createOrder(
+            exchange,
+            symbol,
+            'limit',
+            side,
+            amount,
+            currentPrice,
+          );
+          currentOrderId = newOrder.id;
+          this.logger.log(
+            `[RETRY] New order ${currentOrderId} placed at new price ${currentPrice}.`,
+          );
+        } catch (error) {
+          this.logger.error(
+            `[RETRY] Failed to cancel or re-submit order: ${error.message}`,
+          );
+          throw error; // 재시도 중 오류 발생 시 사이클 실패 처리
+        }
       }
     }
-    throw new Error(
-      `Polling for order ${orderId} timed out after ${this.ORDER_TIMEOUT_MS}ms.`,
+    // --- 최종 타임아웃: 모든 재시도 실패 ---
+    this.logger.error(
+      `[FINAL TIMEOUT] Order failed to fill after ${this.ORDER_RETRY_LIMIT} attempts. Canceling final order ${currentOrderId}.`,
     );
+    try {
+      await this.exchangeService.cancelOrder(exchange, currentOrderId, symbol);
+    } catch (finalCancelError) {
+      this.logger.error(
+        `[FINAL TIMEOUT] CRITICAL: Failed to cancel final order ${currentOrderId}: ${finalCancelError.message}`,
+      );
+    }
+
+    throw new Error(`Order for ${symbol} failed to fill after all retries.`);
   }
 
   /**

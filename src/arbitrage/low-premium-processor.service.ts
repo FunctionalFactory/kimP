@@ -14,6 +14,7 @@ import { StrategyLowService } from '../common/strategy-low.service';
 import { FeeCalculatorService } from '../common/fee-calculator.service';
 import { ExchangeService } from '../common/exchange.service';
 import { ArbitrageCycle } from '../db/entities/arbitrage-cycle.entity';
+import { SlippageCalculatorService } from 'src/common/slippage-calculator.service';
 
 export interface LowPremiumResult {
   success: boolean;
@@ -28,6 +29,7 @@ export class LowPremiumProcessorService {
 
   private readonly watchedSymbols: ReadonlyArray<WatchedSymbolConfig>;
   private readonly MAX_SEARCH_DURATION_MS: number;
+  private readonly MINIMUM_VOLUME_KRW = 10000000000; // 최소 거래대금 100억 원
 
   constructor(
     private readonly configService: ConfigService,
@@ -37,6 +39,7 @@ export class LowPremiumProcessorService {
     private readonly strategyLowService: StrategyLowService,
     private readonly feeCalculatorService: FeeCalculatorService,
     private readonly exchangeService: ExchangeService,
+    private readonly slippageCalculatorService: SlippageCalculatorService, // ⭐️ 주입 추가
   ) {
     this.MAX_SEARCH_DURATION_MS =
       this.configService.get<number>('LOW_PREMIUM_MAX_SEARCH_DURATION_MS') ||
@@ -143,17 +146,72 @@ export class LowPremiumProcessorService {
       );
 
       if (upbitPrice && binancePrice && lowPremiumInvestmentKRW > 0) {
-        const amount = lowPremiumInvestmentKRW / upbitPrice;
+        // 유동성 필터링 로직을 이 곳에 적용합니다.
+        try {
+          const upbitTickerInfo = await this.exchangeService.getTickerInfo(
+            'upbit',
+            watched.symbol,
+          );
+          const upbitVolume24h = upbitTickerInfo.quoteVolume;
+
+          if (upbitVolume24h < this.MINIMUM_VOLUME_KRW) {
+            this.logger.verbose(
+              `[LP_FILTERED] Skipped ${watched.symbol} due to low trading volume: ${(upbitVolume24h / 100000000).toFixed(2)}억 KRW`,
+            );
+            continue; // 거래량이 적으면 다음 코인으로 넘어감
+          }
+        } catch (error) {
+          this.logger.warn(
+            `[LP_FILTER] Failed to get ticker info for ${watched.symbol}: ${error.message}`,
+          );
+          continue; // 티커 정보 조회 실패 시에도 다음 코인으로 넘어감
+        }
+
+        let slippagePercent = 0;
+        try {
+          const upbitOrderBook = await this.exchangeService.getOrderBook(
+            'upbit',
+            watched.symbol,
+          );
+          const slippageResult = this.slippageCalculatorService.calculate(
+            upbitOrderBook,
+            'buy', // LP 단계는 업비트에서 '매수'로 시작
+            lowPremiumInvestmentKRW,
+          );
+          slippagePercent = slippageResult.slippagePercent;
+
+          // 예상 슬리피지가 너무 크면(예: 1%) 해당 코인 건너뛰기
+          if (slippagePercent > 1) {
+            this.logger.verbose(
+              `[LP_FILTER] Skipped ${watched.symbol} (High Slippage: ${slippagePercent.toFixed(2)}%)`,
+            );
+            continue;
+          }
+        } catch (error) {
+          this.logger.warn(
+            `[LP_FILTER] Failed to check slippage for ${watched.symbol}: ${error.message}`,
+          );
+          continue;
+        }
+
+        const amount = lowPremiumInvestmentKRW / upbitPrice; // 근사치 수량
         if (amount <= 0 || isNaN(amount)) continue;
 
         const feeResult = this.feeCalculatorService.calculate({
           symbol: watched.symbol,
           amount,
-          upbitPrice,
+          upbitPrice, // 슬리피지 계산기에서 나온 평균 체결가를 사용하면 더 정확
           binancePrice,
           rate: currentRateForLowPremium,
           tradeDirection: 'LOW_PREMIUM_SELL_BINANCE',
         });
+
+        // feeResult.netProfitPercent에서 예상 슬리피지를 차감하여 최종 기대 수익률 계산
+        const finalExpectedProfitPercent =
+          feeResult.netProfitPercent - slippagePercent;
+        const finalExpectedProfitKrw =
+          feeResult.netProfit -
+          (lowPremiumInvestmentKRW * slippagePercent) / 100;
 
         // this.logger.log(
         //   `[LPP_EVAL] ${watched.symbol.toUpperCase()}: NetProfitKRW: ${feeResult.netProfit.toFixed(0)} vs RequiredKRW: ${requiredProfitKrw.toFixed(0)}`,
@@ -161,18 +219,18 @@ export class LowPremiumProcessorService {
 
         // 최종 수정된 로직: 이 거래의 실제 손익(NetProfitKrw)이 사이클 목표를 위해
         // 감수 가능한 손익(RequiredKrw)보다 좋은지 여부만 확인합니다.
-        if (feeResult.netProfit >= requiredProfitKrw) {
-          // 여러 좋은 후보 중에서는 순수익(KRW)이 가장 좋은(손실이 가장 적은) 코인을 선택
+        if (finalExpectedProfitKrw >= requiredProfitKrw) {
           if (
             !bestLowPremiumOpportunity ||
-            feeResult.netProfit > bestLowPremiumOpportunity.expectedNetProfitKrw
+            finalExpectedProfitKrw >
+              bestLowPremiumOpportunity.expectedNetProfitKrw
           ) {
             bestLowPremiumOpportunity = {
               symbol: watched.symbol,
               upbitPrice,
               binancePrice,
-              expectedNetProfitKrw: feeResult.netProfit,
-              expectedNetProfitRatePercent: feeResult.netProfitPercent,
+              expectedNetProfitKrw: finalExpectedProfitKrw,
+              expectedNetProfitRatePercent: finalExpectedProfitPercent,
               rate: currentRateForLowPremium,
             };
           }
