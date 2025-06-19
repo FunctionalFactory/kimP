@@ -51,8 +51,101 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
 
   async onModuleInit() {
     this.logger.log(
-      'Initializing Flow Manager, checking for incomplete cycles...',
+      'ArbitrageFlowManagerService가 초기화되었습니다. 포트폴리오 상태를 확인합니다...',
     );
+
+    this.logger.log(
+      '포트폴리오 계산 전, 환율 정보를 강제로 업데이트하고 대기합니다...',
+    );
+    await this.exchangeService.updateRate(); // ExchangeService의 환율 업데이트가 완료될 때까지 기다립니다.
+    const rate = this.exchangeService.getUSDTtoKRW();
+
+    // 만약 환율을 여전히 가져오지 못했다면, 에러를 기록하고 더 이상 진행하지 않습니다.
+    if (rate === 0) {
+      this.logger.error(
+        '환율 정보를 가져올 수 없어 포트폴리오 초기화를 진행할 수 없습니다.',
+      );
+      // 아래 미완료 사이클 복구 로직은 환율과 무관하므로 계속 실행되도록 할 수 있습니다.
+      // (기존의 미완료 사이클 복구 로직은 여기에 위치)
+      return;
+    }
+    this.logger.log(`초기화에 적용될 현재 환율: 1 USDT = ${rate} KRW`);
+
+    // 1. 기존에 포트폴리오 로그가 있는지 확인
+    const latestLog = await this.portfolioLogService.getLatestPortfolio();
+    if (latestLog) {
+      this.logger.log(
+        `기존 포트폴리오 로그(ID: ${latestLog.id})가 존재하여, 초기화를 건너뜁니다.`,
+      );
+      return; // 로그가 있으면 아무것도 하지 않고 종료
+    }
+
+    // 2. 로그가 없는 경우, 최초 포트폴리오 로그를 생성
+    this.logger.warn(
+      '포트폴리오 로그가 없습니다. 시스템 시작을 위한 최초 포트폴리오 로그를 생성합니다.',
+    );
+    const mode = this.configService.get<string>('UPBIT_MODE'); // 또는 BINANCE_MODE
+
+    let initialTotalKrw = 0;
+    let upbitKrw = 0;
+    let binanceKrw = 0;
+
+    if (mode === 'REAL') {
+      // 실제 모드: 업비트와 바이낸스의 모든 잔고를 조회하여 합산
+      try {
+        this.logger.log('[REAL MODE] 바이낸스 실제 USDT 잔고를 조회합니다...');
+        const binanceBalances =
+          await this.exchangeService.getBalances('binance');
+        const binanceUsdtBalance =
+          binanceBalances.find((b) => b.currency === 'USDT')?.available || 0;
+
+        // 업비트 KRW 잔고도 함께 조회 (선택적)
+        const upbitBalances = await this.exchangeService.getBalances('upbit');
+        const upbitKrwBalance =
+          upbitBalances.find((b) => b.currency === 'KRW')?.available || 0;
+
+        upbitKrw = upbitKrwBalance;
+        binanceKrw = binanceUsdtBalance * rate; // 실제 USDT 잔고를 원화로 환산
+        initialTotalKrw = upbitKrw + binanceKrw;
+
+        this.logger.log(
+          `[REAL MODE] 실제 잔고 기반 총자산 계산 완료: ${initialTotalKrw.toFixed(0)} KRW`,
+        );
+      } catch (error) {
+        this.logger.error(
+          '실제 잔고 조회 중 오류가 발생하여 초기 자본금으로 대체합니다.',
+          error,
+        );
+        initialTotalKrw =
+          this.configService.get<number>('INITIAL_CAPITAL_KRW') || 0;
+        binanceKrw = initialTotalKrw; // 오류 시 바이낸스에 전액 있는 것으로 가정
+      }
+    } else {
+      // 시뮬레이션 모드: .env 파일의 초기 자본금 사용
+      initialTotalKrw =
+        this.configService.get<number>('INITIAL_CAPITAL_KRW') || 0;
+      binanceKrw = initialTotalKrw; // 시뮬레이션 시 바이낸스에 전액 있는 것으로 가정
+      this.logger.log(
+        `[SIMULATION MODE] 설정된 초기 자본금: ${initialTotalKrw.toFixed(0)} KRW`,
+      );
+    }
+
+    if (initialTotalKrw > 0) {
+      await this.portfolioLogService.createLog({
+        timestamp: new Date(),
+        upbit_balance_krw: upbitKrw,
+        binance_balance_krw: binanceKrw,
+        total_balance_krw: initialTotalKrw,
+        cycle_pnl_krw: 0,
+        cycle_pnl_rate_percent: 0,
+        remarks: 'System Start: Initial portfolio log created on startup.',
+      });
+    } else {
+      this.logger.error(
+        '초기 자본금이 0 이하여서 포트폴리오 로그를 생성하지 못했습니다.',
+      );
+    }
+
     const incompleteCycles = await this.arbitrageCycleRepository.find({
       where: {
         status: Not(

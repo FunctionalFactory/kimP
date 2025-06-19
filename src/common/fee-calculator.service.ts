@@ -1,5 +1,5 @@
 // src/common/fee-calculator.service.ts
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 interface FeeInput {
   symbol: string;
@@ -29,6 +29,8 @@ interface FeeResult {
 
 @Injectable()
 export class FeeCalculatorService {
+  private readonly logger = new Logger(FeeCalculatorService.name);
+
   private readonly BINANCE_TRANSFER_FEE_TABLE: Record<string, number> = {
     xrp: 0.2,
     trx: 1,
@@ -139,6 +141,29 @@ export class FeeCalculatorService {
         upbitPrice,
         rate,
       );
+
+      this.logger.log(
+        `[수수료계산_고프] --- ${symbol.toUpperCase()} 고프리미엄 수수료 상세 내역 ---`,
+      );
+      this.logger.log(
+        `  - 바이낸스 매수 수수료 (KRW): ${fees.binanceSpotBuyFeeKrw?.toFixed(2)}`,
+      );
+      this.logger.log(
+        `  - 업비트 매도 수수료 (KRW): ${fees.upbitSellFeeKrw?.toFixed(2)}`,
+      );
+      this.logger.log(
+        `  - 업비트로 전송 수수료 (KRW): ${fees.transferCoinToUpbitFeeKrw?.toFixed(2)}`,
+      );
+      this.logger.log(
+        `  - USDT 전송 수수료 (KRW): ${fees.usdtTransferFeeKrw?.toFixed(2)}`,
+      );
+      this.logger.log(
+        `  - 선물 진입 수수료 (KRW): ${fees.binanceFuturesEntryFeeKrw?.toFixed(2)}`,
+      );
+      this.logger.log(
+        `  - 선물 청산 수수료 (KRW): ${fees.binanceFuturesExitFeeKrw?.toFixed(2)}`,
+      );
+      this.logger.log(`  ----------------------------------------------------`);
     } else if (tradeDirection === 'LOW_PREMIUM_SELL_BINANCE') {
       const globalSellPriceKRW = effectiveBinancePrice * rate;
       grossProfit = (globalSellPriceKRW - effectiveUpbitPrice) * amount;
@@ -151,6 +176,26 @@ export class FeeCalculatorService {
         upbitPrice,
         rate,
       );
+
+      this.logger.log(
+        `[수수료계산_저프] --- ${symbol.toUpperCase()} 저프리미엄 수수료 상세 내역 ---`,
+      );
+      this.logger.log(
+        `  - 업비트 매수 수수료 (KRW): ${fees.upbitBuyFeeKrw?.toFixed(2)}`,
+      );
+      this.logger.log(
+        `  - 바이낸스 매도 수수료 (KRW): ${fees.binanceSpotSellFeeKrw?.toFixed(2)}`,
+      );
+      this.logger.log(
+        `  - 바이낸스로 전송 수수료 (KRW): ${fees.transferCoinToBinanceFeeKrw?.toFixed(2)}`,
+      );
+      this.logger.log(
+        `  - 선물 진입 수수료 (KRW): ${fees.binanceFuturesEntryFeeKrw?.toFixed(2)}`,
+      );
+      this.logger.log(
+        `  - 선물 청산 수수료 (KRW): ${fees.binanceFuturesExitFeeKrw?.toFixed(2)}`,
+      );
+      this.logger.log(`  ----------------------------------------------------`);
     } else {
       throw new Error('Invalid trade direction specified for fee calculation.');
     }
@@ -184,7 +229,7 @@ export class FeeCalculatorService {
     binanceFuturesEntryFeeKrw: number;
     binanceFuturesExitFeeKrw: number;
     transferCoinToUpbitFeeKrw: number;
-    usdtTransferFeeKrw: number;
+    // usdtTransferFeeKrw: number;
   } {
     const spotFeeRate = 0.001;
     const futuresFeeRate = 0.0004;
@@ -202,15 +247,15 @@ export class FeeCalculatorService {
     const transferCoinToUpbitFeeKrw =
       transferUnit !== undefined ? transferUnit * binancePrice * rate : 0;
 
-    const usdtTransferFeeKrw = 1 * rate;
+    // const usdtTransferFeeKrw = 1 * rate;
 
     const total =
       binanceSpotBuyFeeKrw +
       upbitSellFeeKrw +
       binanceFuturesEntryFeeKrw +
       binanceFuturesExitFeeKrw +
-      transferCoinToUpbitFeeKrw +
-      usdtTransferFeeKrw;
+      transferCoinToUpbitFeeKrw;
+    // usdtTransferFeeKrw;
 
     const feeDetails = {
       total,
@@ -219,7 +264,7 @@ export class FeeCalculatorService {
       binanceFuturesEntryFeeKrw,
       binanceFuturesExitFeeKrw,
       transferCoinToUpbitFeeKrw,
-      usdtTransferFeeKrw,
+      // usdtTransferFeeKrw,
     };
 
     return feeDetails;

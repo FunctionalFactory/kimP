@@ -24,7 +24,7 @@ export class HighPremiumProcessorService {
 
   private readonly TARGET_OVERALL_CYCLE_PROFIT_PERCENT: number;
   private readonly INITIAL_CAPITAL_KRW: number;
-  private readonly MINIMUM_VOLUME_KRW = 3000000000; // 최소 거래대금 100억 원
+  private readonly MINIMUM_VOLUME_KRW = 5000000000; // 최소 거래대금 100억 원
 
   constructor(
     private readonly configService: ConfigService,
@@ -36,6 +36,10 @@ export class HighPremiumProcessorService {
     private readonly strategyHighService: StrategyHighService,
     private readonly slippageCalculatorService: SlippageCalculatorService, // ⭐️ 주입 추가
   ) {
+    this.logger.log(
+      `[초기화] HighPremiumProcessorService 초기화 완료. 최소 거래대금 기준: ${(this.MINIMUM_VOLUME_KRW / 100000000).toFixed(2)}억 KRW`,
+    );
+
     this.TARGET_OVERALL_CYCLE_PROFIT_PERCENT =
       this.configService.get<number>('TARGET_OVERALL_CYCLE_PROFIT_PERCENT') ||
       0.1;

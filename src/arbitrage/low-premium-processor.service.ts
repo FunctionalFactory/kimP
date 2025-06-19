@@ -41,6 +41,10 @@ export class LowPremiumProcessorService {
     private readonly exchangeService: ExchangeService,
     private readonly slippageCalculatorService: SlippageCalculatorService, // ⭐️ 주입 추가
   ) {
+    this.logger.log(
+      `[초기화] LowPremiumProcessorService 초기화 완료. 최소 거래대금 기준: ${(this.MINIMUM_VOLUME_KRW / 100000000).toFixed(2)}억 KRW`,
+    );
+
     this.MAX_SEARCH_DURATION_MS =
       this.configService.get<number>('LOW_PREMIUM_MAX_SEARCH_DURATION_MS') ||
       60000 * 60; // 1 hour
