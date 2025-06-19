@@ -62,7 +62,7 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
       { symbol: 'icx', upbit: 'KRW-ICX', binance: 'icxusdt' }, //
       { symbol: 'qtum', upbit: 'KRW-QTUM', binance: 'qtumusdt' }, //
       { symbol: 'neo', upbit: 'KRW-NEO', binance: 'neousdt' }, //
-      // { symbol: 'btt', upbit: 'KRW-BTT', binance: 'bttcusdt' }, //
+      { symbol: 'btt', upbit: 'KRW-BTT', binance: 'bttcusdt' }, //
       { symbol: 'mana', upbit: 'KRW-MANA', binance: 'manausdt' }, //
       { symbol: 'grt', upbit: 'KRW-GRT', binance: 'grtusdt' }, //
       { symbol: 'ardr', upbit: 'KRW-ARDR', binance: 'ardrusdt' }, //

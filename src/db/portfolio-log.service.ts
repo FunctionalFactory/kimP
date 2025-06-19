@@ -86,9 +86,9 @@ export class PortfolioLogService {
           `가장 최근 포트폴리오 로그 조회됨: ID ${latestLog.id}, 총 잔고 ${totalBalanceForLog !== null ? totalBalanceForLog.toFixed(0) : 'N/A'} KRW (Timestamp: ${latestLog.timestamp.toISOString()})`,
         );
       } else {
-        this.logger.warn(
-          '조회된 포트폴리오 로그가 없습니다. 초기 자본 설정이 필요할 수 있습니다.',
-        );
+        // this.logger.warn(
+        //   '조회된 포트폴리오 로그가 없습니다. 초기 자본 설정이 필요할 수 있습니다.',
+        // );
       }
       return latestLog;
     } catch (error) {

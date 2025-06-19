@@ -29,7 +29,7 @@ export class LowPremiumProcessorService {
 
   private readonly watchedSymbols: ReadonlyArray<WatchedSymbolConfig>;
   private readonly MAX_SEARCH_DURATION_MS: number;
-  private readonly MINIMUM_VOLUME_KRW = 10000000000; // 최소 거래대금 100억 원
+  private readonly MINIMUM_VOLUME_KRW = 5000000000; // 최소 거래대금 100억 원
 
   constructor(
     private readonly configService: ConfigService,

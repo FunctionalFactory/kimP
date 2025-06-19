@@ -24,7 +24,7 @@ export class HighPremiumProcessorService {
 
   private readonly TARGET_OVERALL_CYCLE_PROFIT_PERCENT: number;
   private readonly INITIAL_CAPITAL_KRW: number;
-  private readonly MINIMUM_VOLUME_KRW = 10000000000; // 최소 거래대금 100억 원
+  private readonly MINIMUM_VOLUME_KRW = 3000000000; // 최소 거래대금 100억 원
 
   constructor(
     private readonly configService: ConfigService,

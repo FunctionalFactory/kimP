@@ -9,6 +9,7 @@ import {
   Balance,
   WalletStatus,
   WithdrawalChance,
+  TickerInfo,
 } from './exchange.interface';
 
 @Injectable()
@@ -237,5 +238,47 @@ export class SimulationExchangeService implements IExchange, OnModuleInit {
     symbol: string,
   ): Promise<{ address: string; tag?: string }> {
     return { address: `sim-address-${symbol}`, tag: `sim-tag-${symbol}` };
+  }
+
+  /**
+   * 주문 취소를 시뮬레이션합니다.
+   */
+  async cancelOrder(orderId: string, symbol?: string): Promise<any> {
+    this.logger.log(`[SIMULATION] Canceling order ${orderId} for ${symbol}`);
+    const order = this.simulatedOrders.get(orderId);
+    if (order) {
+      order.status = 'canceled';
+      this.simulatedOrders.set(orderId, order);
+    }
+    return {
+      status: 'CANCELED',
+      id: orderId,
+    };
+  }
+
+  /**
+   * 티커 정보 조회를 시뮬레이션합니다.
+   * 유동성 필터 테스트를 통과할 수 있도록 충분히 큰 가상의 거래대금을 반환합니다.
+   */
+  async getTickerInfo(symbol: string): Promise<TickerInfo> {
+    this.logger.log(`[SIMULATION] Getting ticker info for ${symbol}`);
+    return {
+      symbol: `KRW-${symbol.toUpperCase()}`,
+      quoteVolume: 50000000000, // 500억 원
+    };
+  }
+
+  /**
+   * 거래 수수료 조회를 시뮬레이션합니다.
+   */
+  async getTradeFeeInfo(
+    symbol?: string,
+  ): Promise<import('../common/exchange.interface').TradeFeeInfo> {
+    this.logger.log(`[SIMULATION] Getting trade fee info for ${symbol}`);
+    // 업비트와 바이낸스의 일반적인 수수료율을 가정하여 반환
+    return {
+      makerCommission: 0.001, // 0.1%
+      takerCommission: 0.001, // 0.1%
+    };
   }
 }

@@ -17,6 +17,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { ArbitrageCycle } from '../db/entities/arbitrage-cycle.entity';
 import { In, Not, Repository } from 'typeorm';
 import { ArbitrageRecordService } from '../db/arbitrage-record.service';
+import { PortfolioLogService } from 'src/db/portfolio-log.service'; // ⭐️ Import 추가
+import { ExchangeService } from 'src/common/exchange.service';
 
 @Injectable()
 export class ArbitrageFlowManagerService implements OnModuleInit {
@@ -37,6 +39,8 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
     private readonly arbitrageRecordService: ArbitrageRecordService,
     @InjectRepository(ArbitrageCycle)
     private readonly arbitrageCycleRepository: Repository<ArbitrageCycle>,
+    private readonly portfolioLogService: PortfolioLogService, // ⭐️ 주입 추가
+    private readonly exchangeService: ExchangeService, // ⭐️ 1. exchangeService 주입 추가
   ) {
     this.profitThresholdPercent =
       this.configService.get<number>('PROFIT_THRESHOLD_PERCENT') || 0.7;
@@ -150,33 +154,38 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
       const binancePrice = this.priceFeedService.getBinancePrice(symbol);
       if (upbitPrice === undefined || binancePrice === undefined) return;
 
-      // 1. 순수익률 계산
+      // --- 1. 잠재적 투자금액 결정 ---
+      // 실제 거래에서는 더 정교한 방법으로 투자금을 결정해야 합니다.
+      // 여기서는 최신 포트폴리오의 10%를 투자한다고 가정합니다.
+      const latestPortfolio =
+        await this.portfolioLogService.getLatestPortfolio();
+      const totalCapitalKRW =
+        latestPortfolio?.total_balance_krw ||
+        this.configService.get<number>('INITIAL_CAPITAL_KRW');
+      const investmentKRW = Number(totalCapitalKRW) * 0.1;
+      const rate = this.exchangeService.getUSDTtoKRW();
+      if (rate === 0) {
+        this.logger.warn('Rate is 0, skipping opportunity check.');
+        return;
+      }
+      const investmentUSDT = investmentKRW / rate;
+
+      // --- 2. '전문가'에게 검증된 기회인지 문의 ---
+      // 이제 calculateSpread는 가격, 거래량, 슬리피지 필터를 모두 통과한 '진짜 기회'만 반환합니다.
       const opportunity = await this.spreadCalculatorService.calculateSpread({
         symbol,
         upbitPrice,
         binancePrice,
-        profitThresholdPercent: this.profitThresholdPercent,
+        investmentUSDT,
       });
 
-      // 2. 수익 기회가 있는 경우
+      // --- 3. 검증된 기회에 대해서만 의사결정 진행 ---
       if (opportunity) {
-        // 3. 이미 결정 시간이 활성화된 경우
-        if (currentState === CycleExecutionStatus.DECISION_WINDOW_ACTIVE) {
-          const currentBest = this.cycleStateService.getBestOpportunity();
-          // 새로 찾은 기회가 기존 최고 후보보다 좋으면 교체
-          if (
-            currentBest &&
-            opportunity.netProfitPercent > currentBest.netProfitPercent
-          ) {
-            this.cycleStateService.setBestOpportunity(opportunity);
-          }
-        }
-        // 4. IDLE 상태에서 처음으로 기회를 찾은 경우
-        else if (currentState === CycleExecutionStatus.IDLE) {
-          // 최고 후보로 설정하고 결정 시간 타이머 시작
+        // 3. 상태에 따라 다르게 행동
+        if (currentState === CycleExecutionStatus.IDLE) {
+          // IDLE 상태에서 처음으로 '진짜' 기회를 찾았으므로 결정 시간 타이머 시작
           this.cycleStateService.setBestOpportunity(opportunity);
           this.cycleStateService.startDecisionWindow(async () => {
-            // 타이머 종료 후 실행될 로직
             const finalOpportunity =
               this.cycleStateService.getBestOpportunity();
             if (!finalOpportunity) {
@@ -187,13 +196,11 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
               return;
             }
 
-            // HighPremiumProcessor 호출
             const hpResult =
               await this.highPremiumProcessorService.processHighPremiumOpportunity(
                 finalOpportunity,
               );
 
-            // 결과 처리
             if (
               hpResult.success &&
               hpResult.nextStep === 'awaitLowPremium' &&
@@ -202,25 +209,34 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
               this.logger.log(
                 `High premium processing successful (Cycle: ${hpResult.cycleId}). Awaiting low premium processing.`,
               );
-              // processLowPremium은 다음 가격 업데이트 시 자동으로 호출됨
             } else if (!hpResult.success) {
+              // ⭐️ 2. 오류 로그 수정
               this.logger.error(
-                `High premium failed after decision. Triggering completion if cycleId exists.`,
+                `High premium processing failed. Triggering completion if cycleId exists.`,
               );
               if (hpResult.cycleId) {
                 await this.cycleCompletionService.completeCycle(
                   hpResult.cycleId,
                 );
               } else {
-                this.cycleStateService.resetCycleState(); // Cycle ID도 없으면 그냥 리셋
+                this.cycleStateService.resetCycleState();
               }
             }
           }, this.DECISION_WINDOW_MS);
+        } else if (
+          currentState === CycleExecutionStatus.DECISION_WINDOW_ACTIVE
+        ) {
+          // 이미 결정 시간이 활성화된 경우, 더 좋은 기회로 후보를 교체
+          const currentBest = this.cycleStateService.getBestOpportunity();
+          if (
+            !currentBest ||
+            opportunity.netProfitPercent > currentBest.netProfitPercent
+          ) {
+            this.cycleStateService.setBestOpportunity(opportunity);
+          }
         }
       }
-    }
-    // 저프리미엄 탐색 로직은 그대로 유지
-    else if (currentState === CycleExecutionStatus.AWAITING_LOW_PREMIUM) {
+    } else if (currentState === CycleExecutionStatus.AWAITING_LOW_PREMIUM) {
       await this.processLowPremium();
     }
   }

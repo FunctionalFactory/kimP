@@ -29,6 +29,7 @@ import { PortfolioLog } from '../db/entities/portfolio-log.entity';
 import { ArbitrageCycle } from '../db/entities/arbitrage-cycle.entity';
 import { StrategyHighService } from 'src/common/strategy-high.service';
 import { DepositMonitorService } from './deposit-monitor.service';
+import { SlippageCalculatorService } from 'src/common/slippage-calculator.service';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { DepositMonitorService } from './deposit-monitor.service';
     FeeCalculatorService,
     ExchangeService,
     FeeCalculatorService,
+    SlippageCalculatorService,
   ],
   exports: [
     ArbitrageFlowManagerService,
