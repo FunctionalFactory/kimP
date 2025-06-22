@@ -24,6 +24,7 @@ export class BinanceService implements IExchange {
   private readonly apiKey: string;
   private readonly secretKey: string;
   private readonly serverUrl = 'https://api.binance.com';
+  private readonly futuresServerUrl = 'https://fapi.binance.com';
   private symbolInfoCache = new Map<string, any>();
 
   constructor(private readonly configService: ConfigService) {
@@ -36,6 +37,50 @@ export class BinanceService implements IExchange {
       this.logger.error('Binance API Key is missing. Please check .env file.');
     } else {
       this.logger.log('BinanceService (REAL) has been initialized.');
+    }
+    this.initializeFuturesSettings();
+  }
+  // <<<< 신규 추가: 서비스 시작 시 모든 감시 대상 코인에 대해 1배율로 설정 >>>>
+  private async initializeFuturesSettings() {
+    // 이 부분은 실제 운영 시 WATCHED_SYMBOLS 목록을 가져와서 처리해야 합니다.
+    // 여기서는 예시로 XRP만 처리합니다.
+    const symbolsToHedge = ['XRP', 'TRX', 'DOGE']; // 실제로는 ConfigService 등에서 관리
+    this.logger.log('[HEDGE_INIT] 선물 헷지 설정 초기화를 시작합니다...');
+    for (const symbol of symbolsToHedge) {
+      try {
+        await this.setLeverage(symbol, 1);
+      } catch (error) {
+        this.logger.error(
+          `[HEDGE_INIT] ${symbol} 레버리지 설정 실패: ${error.message}`,
+        );
+      }
+    }
+  }
+
+  // <<<< 신규 추가: 선물 레버리지 설정을 위한 내부 메소드 >>>>
+  private async setLeverage(symbol: string, leverage: number): Promise<any> {
+    const endpoint = '/fapi/v1/leverage';
+    const params = {
+      symbol: `${symbol.toUpperCase()}USDT`,
+      leverage,
+      timestamp: Date.now(),
+    };
+    const queryString = querystring.stringify(params);
+    const signature = this._generateSignature(queryString);
+    const url = `${this.futuresServerUrl}${endpoint}?${queryString}&signature=${signature}`;
+
+    try {
+      const response = await axios.post(url, null, {
+        headers: { 'X-MBX-APIKEY': this.apiKey },
+      });
+      this.logger.log(
+        `[HEDGE_INIT] ${symbol} 레버리지를 ${leverage}x로 설정했습니다.`,
+      );
+      return response.data;
+    } catch (error) {
+      const errorMessage = error.response?.data?.msg || error.message;
+      this.logger.error(`[HEDGE_INIT] 레버리지 설정 API 오류: ${errorMessage}`);
+      throw new Error(`Binance API Error: ${errorMessage}`);
     }
   }
 
@@ -567,6 +612,48 @@ export class BinanceService implements IExchange {
       const errorMessage = error.response?.data?.msg || error.message;
       this.logger.error(
         `[Binance-REAL] Failed to cancel order ${orderId}: ${errorMessage}`,
+      );
+      throw new Error(`Binance API Error: ${errorMessage}`);
+    }
+  }
+
+  // <<<< 신규 추가: IExchange 인터페이스를 만족시키는 선물 주문 메소드 구현 >>>>
+  async createFuturesOrder(
+    symbol: string,
+    side: OrderSide,
+    type: OrderType,
+    amount: number,
+    price?: number,
+  ): Promise<Order> {
+    const endpoint = '/fapi/v1/order';
+    const params: any = {
+      symbol: `${symbol.toUpperCase()}USDT`,
+      side: side.toUpperCase(),
+      type: type.toUpperCase(),
+      quantity: amount,
+      timestamp: Date.now(),
+    };
+
+    if (type.toUpperCase() === 'LIMIT') {
+      if (!price) throw new Error('Limit order requires a price.');
+      params.price = price;
+      params.timeInForce = 'GTC';
+    }
+
+    const queryString = querystring.stringify(params);
+    const signature = this._generateSignature(queryString);
+    const url = `${this.futuresServerUrl}${endpoint}?${queryString}&signature=${signature}`;
+
+    try {
+      const response = await axios.post(url, null, {
+        headers: { 'X-MBX-APIKEY': this.apiKey },
+      });
+      // 선물 주문 응답도 현물과 형식이 유사하므로 기존 변환 함수 재사용 가능
+      return this.transformBinanceOrder(response.data);
+    } catch (error) {
+      const errorMessage = error.response?.data?.msg || error.message;
+      this.logger.error(
+        `[Binance-FUTURES] 선물 주문 생성 실패: ${errorMessage}`,
       );
       throw new Error(`Binance API Error: ${errorMessage}`);
     }

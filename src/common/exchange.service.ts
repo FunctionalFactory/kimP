@@ -173,4 +173,32 @@ export class ExchangeService {
   ): Promise<any> {
     return this.getService(exchange).cancelOrder(orderId, symbol);
   }
+
+  /**
+   * 선물 주문 요청을 적절한 거래소 서비스로 중개합니다.
+   */
+  async createFuturesOrder(
+    exchange: ExchangeType,
+    symbol: string,
+    side: OrderSide,
+    type: OrderType,
+    amount: number,
+    price?: number,
+  ): Promise<Order> {
+    // 현재 시스템에서는 바이낸스만 선물 거래를 지원한다고 가정
+    if (exchange !== 'binance') {
+      this.logger.error(
+        `[ExchangeService] ${exchange}에서는 선물 거래를 지원하지 않습니다.`,
+      );
+      throw new Error(`Futures trading is not supported on ${exchange}.`);
+    }
+    // getService('binance')를 통해 실제 BinanceService의 메소드를 호출
+    return this.getService(exchange).createFuturesOrder(
+      symbol,
+      side,
+      type,
+      amount,
+      price,
+    );
+  }
 }

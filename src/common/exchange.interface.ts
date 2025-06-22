@@ -201,4 +201,22 @@ export interface IExchange {
    * @returns 티커 정보
    */
   getTickerInfo(symbol: string): Promise<TickerInfo>;
+
+  /**
+   * <<<< 신규 추가: 선물 주문 생성 >>>>
+   * 선물(Futures) 주문을 생성합니다. (헷지용)
+   * @param symbol - 'XRP'와 같이 거래소에서 사용하는 코인 심볼
+   * @param side - 'BUY'(숏커버) 또는 'SELL'(숏 진입)
+   * @param type - 'MARKET', 'LIMIT' 등
+   * @param amount - 주문 수량
+   * @param price - (선택적) 지정가 주문 시 가격
+   * @returns 생성된 선물 주문의 정보
+   */
+  createFuturesOrder(
+    symbol: string,
+    side: OrderSide,
+    type: OrderType,
+    amount: number,
+    price?: number,
+  ): Promise<Order>;
 }

@@ -42,6 +42,8 @@ export class StrategyHighService {
       `[STRATEGY_HIGH] Starting trade process for cycle ${cycleId}`,
     );
 
+    let shortPositionAmount = 0;
+
     try {
       // 0. 사전 안전 점검
       const binanceWalletStatus = await this.exchangeService.getWalletStatus(
@@ -154,6 +156,36 @@ export class StrategyHighService {
         `[STRATEGY_HIGH] Binance buy order for ${symbol} filled.`,
       );
 
+      try {
+        this.logger.log(
+          `[HEDGE] 현물 매수 완료. ${symbol} 1x 숏 포지션 진입을 시작합니다...`,
+        );
+        shortPositionAmount = filledBuyOrder.filledAmount; // 헷지할 수량 기록
+
+        const shortOrder = await this.exchangeService.createFuturesOrder(
+          'binance',
+          symbol,
+          'sell', // 숏 포지션이므로 'SELL'
+          'market', // 시장가로 즉시 진입
+          shortPositionAmount,
+        );
+
+        this.logger.log(`[HEDGE] 숏 포지션 진입 성공. TxID: ${shortOrder.id}`);
+        await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
+          hp_short_entry_tx_id: shortOrder.id, // DB에 숏 포지션 주문 ID 기록
+        });
+      } catch (hedgeError) {
+        this.logger.error(
+          `[HEDGE_FAIL] 숏 포지션 진입에 실패했습니다: ${hedgeError.message}`,
+        );
+        // 헷지에 실패했더라도 일단 플로우는 계속 진행하되, 관리자에게 알림을 보내는 등의 추가 조치 필요
+        await this.telegramService.sendMessage(
+          `🚨 [긴급] 사이클 ${cycleId}의 ${symbol} 헷지 포지션 진입에 실패했습니다. 즉시 확인 필요!`,
+        );
+        // 에러를 다시 던져서 사이클을 실패 처리할 수도 있음
+        // throw hedgeError;
+      }
+
       this.logger.log(
         `[STRATEGY_HIGH] 교차 검증: 매수 후 실제 바이낸스 잔고를 확인합니다...`,
       );
@@ -260,32 +292,40 @@ export class StrategyHighService {
         `[STRATEGY_HIGH] 최종 확인된 전량 매도 수량: ${amountToSell} ${symbol}`,
       );
 
-      // 4. 업비트 매도
-      const sellOrder = await this.exchangeService.createOrder(
-        'upbit',
-        symbol,
-        'limit',
-        'sell',
-        amountToSell,
-        upbitPrice,
-      );
-      const filledSellOrder = await this.pollOrderStatus(
+      const filledSellOrder = await this.aggressiveSellOnUpbit(
         cycleId,
-        'upbit',
-        sellOrder.id,
         symbol,
-        upbitPrice, // 초기 가격 전달
-        'sell', // 주문 방향 전달
-        amountToSell, // 재주문 시 사용할 수량 전달
+        amountToSell,
       );
 
-      if (filledSellOrder === null) {
-        const manualSellRequestMessage = `🚨 [수동 판매 요청] 🚨\n\n사이클 ID: ${cycleId}\n코인: ${symbol.toUpperCase()}\n수량: ${amountToSell}\n\n업비트에서 해당 코인의 자동 판매에 실패했습니다. 지금 즉시 업비트에서 직접 매도해주세요.`;
+      // <<<< 신규 추가: 업비트 현물 매도 성공 직후 헷지 숏 포지션 종료 >>>>
+      try {
+        this.logger.log(
+          `[HEDGE] 현물 매도 완료. ${symbol} 숏 포지션 종료를 시작합니다...`,
+        );
 
-        await this.telegramService.sendMessage(manualSellRequestMessage);
+        const closeShortOrder = await this.exchangeService.createFuturesOrder(
+          'binance',
+          symbol,
+          'buy', // 숏 포지션 종료는 'BUY'
+          'market',
+          shortPositionAmount, // 진입했던 수량 그대로 청산
+        );
 
-        // 사이클 상태를 FAILED로 기록하되, 명확한 사유를 남김
-        throw new Error(`자동 판매 실패. 사용자 수동 개입이 필요합니다.`);
+        this.logger.log(
+          `[HEDGE] 숏 포지션 종료 성공. TxID: ${closeShortOrder.id}`,
+        );
+        await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
+          hp_short_close_tx_id: closeShortOrder.id, // DB에 숏 포지션 종료 주문 ID 기록
+        });
+      } catch (hedgeError) {
+        this.logger.error(
+          `[HEDGE_FAIL] 숏 포지션 종료에 실패했습니다: ${hedgeError.message}`,
+        );
+        await this.telegramService.sendMessage(
+          `🚨 [긴급] 사이클 ${cycleId}의 ${symbol} 숏 포지션 종료에 실패했습니다. 즉시 수동 청산 필요!`,
+        );
+        // 여기서 에러를 던지면 사이클이 FAILED 처리되므로, 일단 로깅 및 알림만 하고 넘어갈 수 있음
       }
 
       // 안됬을때 방법 생각하기
@@ -424,6 +464,96 @@ export class StrategyHighService {
 
     // null을 반환하여 handleHighPremiumFlow에서 후속 처리를 하도록 함
     return null;
+  }
+
+  private async aggressiveSellOnUpbit(
+    cycleId: string,
+    symbol: string,
+    amountToSell: number,
+  ): Promise<Order> {
+    this.logger.log(
+      `[AGGRESSIVE_SELL] ${amountToSell} ${symbol} 전량 매도를 시작합니다.`,
+    );
+    const market = `KRW-${symbol.toUpperCase()}`;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        // 1. 5초마다 현재가 조회
+        this.logger.verbose(`[AGGRESSIVE_SELL] 현재가 조회를 시도합니다...`);
+        const tickerResponse = await axios.get(
+          `https://api.upbit.com/v1/ticker?markets=${market}`,
+        );
+        const currentPrice = tickerResponse.data[0]?.trade_price;
+
+        if (!currentPrice) {
+          this.logger.warn(
+            `[AGGRESSIVE_SELL] 현재가 조회 실패. 5초 후 재시도합니다.`,
+          );
+          await delay(5000);
+          continue;
+        }
+
+        this.logger.log(
+          `[AGGRESSIVE_SELL] 현재가: ${currentPrice} KRW. 해당 가격으로 지정가 매도를 시도합니다.`,
+        );
+
+        // 2. 현재가로 지정가 매도 주문
+        const sellOrder = await this.exchangeService.createOrder(
+          'upbit',
+          symbol,
+          'limit',
+          'sell',
+          amountToSell,
+          currentPrice,
+        );
+
+        // 3. 짧은 시간(예: 10초) 동안 체결 여부 확인
+        const startTime = Date.now();
+        while (Date.now() - startTime < 10000) {
+          // 10초간 폴링
+          const orderStatus = await this.exchangeService.getOrder(
+            'upbit',
+            sellOrder.id,
+            symbol,
+          );
+          if (orderStatus.status === 'filled') {
+            this.logger.log(
+              `[AGGRESSIVE_SELL] 매도 성공! Order ID: ${orderStatus.id}`,
+            );
+            return orderStatus; // 체결 완료 시, 주문 정보 반환 및 함수 종료
+          }
+          await delay(2000); // 2초 간격으로 확인
+        }
+
+        // 4. 10초 후에도 미체결 시 주문 취소 (다음 루프에서 새로운 가격으로 다시 시도)
+        this.logger.log(
+          `[AGGRESSIVE_SELL] 10초 내 미체결. 주문을 취소하고 새로운 가격으로 재시도합니다. Order ID: ${sellOrder.id}`,
+        );
+        await this.exchangeService.cancelOrder('upbit', sellOrder.id, symbol);
+      } catch (error) {
+        const errorMessage = error.message.toLowerCase();
+        // 재시도가 무의미한 특정 에러 키워드들
+        const fatalErrors = [
+          'insufficient funds',
+          'invalid access key',
+          'minimum total',
+        ];
+
+        if (fatalErrors.some((keyword) => errorMessage.includes(keyword))) {
+          this.logger.error(
+            `[AGGRESSIVE_SELL] 치명적 오류 발생, 매도를 중단합니다: ${error.message}`,
+          );
+          // 여기서 에러를 다시 던져서 handleHighPremiumFlow의 메인 catch 블록으로 넘김
+          throw error;
+        }
+
+        this.logger.error(
+          `[AGGRESSIVE_SELL] 매도 시도 중 오류 발생: ${error.message}. 5초 후 재시도합니다.`,
+        );
+      }
+      await delay(5000); // 다음 시도까지 5초 대기
+    }
   }
 
   /**

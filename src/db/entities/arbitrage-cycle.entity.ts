@@ -258,6 +258,12 @@ export class ArbitrageCycle {
   @Column({ nullable: true, name: 'hp_withdraw_tx_id' })
   highPremiumWithdrawTxId: string;
 
+  @Column({ nullable: true, name: 'hp_short_entry_tx_id' })
+  hp_short_entry_tx_id: string; // 숏 포지션 진입 주문 ID
+
+  @Column({ nullable: true, name: 'hp_short_close_tx_id' })
+  hp_short_close_tx_id: string; // 숏 포지션 종료 주문 ID
+
   @Column({ nullable: true, name: 'lp_buy_tx_id' })
   lowPremiumBuyTxId: string;
 
