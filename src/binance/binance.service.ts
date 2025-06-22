@@ -24,6 +24,7 @@ export class BinanceService implements IExchange {
   private readonly apiKey: string;
   private readonly secretKey: string;
   private readonly serverUrl = 'https://api.binance.com';
+  private symbolInfoCache = new Map<string, any>();
 
   constructor(private readonly configService: ConfigService) {
     this.logger.error('<<<<< BinanceService (REAL) IS LOADED >>>>>');
@@ -44,6 +45,36 @@ export class BinanceService implements IExchange {
       return 'BTTC';
     }
     return upperSymbol;
+  }
+
+  private async _getSymbolInfo(symbol: string): Promise<any> {
+    const market = `${this.getExchangeTicker(symbol).toUpperCase()}USDT`;
+    if (this.symbolInfoCache.has(market)) {
+      return this.symbolInfoCache.get(market);
+    }
+
+    try {
+      this.logger.log(`Fetching exchange info for ${market}...`);
+      const response = await axios.get(`${this.serverUrl}/api/v3/exchangeInfo`);
+      const allSymbols = response.data.symbols;
+      const symbolInfo = allSymbols.find((s: any) => s.symbol === market);
+
+      if (symbolInfo) {
+        this.symbolInfoCache.set(market, symbolInfo);
+        return symbolInfo;
+      } else {
+        throw new Error(`Symbol info for ${market} not found.`);
+      }
+    } catch (error) {
+      this.logger.error(`Failed to fetch exchange info: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // 숫자를 특정 정밀도(stepSize)에 맞게 조정하는 헬퍼 메소드
+  private _adjustToStepSize(value: number, stepSize: string): number {
+    const precision = Math.max(stepSize.indexOf('1') - 1, 0);
+    return parseFloat(value.toFixed(precision));
   }
 
   /**
@@ -138,6 +169,15 @@ export class BinanceService implements IExchange {
   ): Promise<Order> {
     const exchangeTicker = this.getExchangeTicker(symbol); // ✨ 헬퍼 함수 호출 추가
     const endpoint = '/api/v3/order';
+
+    const symbolInfo = await this._getSymbolInfo(symbol);
+    const priceFilter = symbolInfo.filters.find(
+      (f: any) => f.filterType === 'PRICE_FILTER',
+    );
+    const lotSizeFilter = symbolInfo.filters.find(
+      (f: any) => f.filterType === 'LOT_SIZE',
+    );
+
     const params: any = {
       symbol: `${exchangeTicker.toUpperCase()}USDT`,
       side: side.toUpperCase(),
@@ -147,8 +187,16 @@ export class BinanceService implements IExchange {
 
     if (type === 'limit') {
       params.timeInForce = 'GTC';
-      params.price = price;
-      params.quantity = amount;
+
+      const tickSize = priceFilter.tickSize;
+      const stepSize = lotSizeFilter.stepSize;
+
+      params.price = this._adjustToStepSize(price, tickSize);
+      params.quantity = this._adjustToStepSize(amount, stepSize);
+
+      this.logger.log(
+        `Adjusted order params: Price ${price} -> ${params.price}, Amount ${amount} -> ${params.quantity}`,
+      );
     } else if (type === 'market') {
       if (side === 'buy') {
         // 시장가 매수: 'price' 파라미터에 담겨온 총액(USDT)을 quoteOrderQty로 사용
@@ -341,11 +389,17 @@ export class BinanceService implements IExchange {
     tag?: string,
   ): Promise<any> {
     const endpoint = '/sapi/v1/capital/withdraw/apply';
+
+    const networkToUse = net_type || this.getNetworkType(symbol.toUpperCase());
+    this.logger.log(
+      `출금 요청: ${symbol} 코인을 ${networkToUse} 네트워크로 전송합니다.`,
+    );
+
     const params: any = {
       coin: symbol.toUpperCase(),
       address: address,
       amount: amount,
-      network: net_type,
+      network: networkToUse, // 결정된 네트워크 값을 사용합니다.
       timestamp: Date.now(),
     };
 

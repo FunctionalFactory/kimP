@@ -39,6 +39,23 @@ export class UpbitService implements IExchange {
   }
 
   /**
+   * 업비트의 호가 단위 규칙에 맞게 가격을 조정하는 헬퍼 함수
+   * @param price 조정할 가격
+   * @returns 조정된 가격
+   */
+  private _adjustPriceToUnit(price: number): number {
+    if (price >= 2000000) return Math.round(price / 1000) * 1000;
+    if (price >= 1000000) return Math.round(price / 500) * 500;
+    if (price >= 100000) return Math.round(price / 50) * 50;
+    if (price >= 10000) return Math.round(price / 10) * 10;
+    if (price >= 1000) return Math.round(price / 1) * 1;
+    if (price >= 100) return Math.round(price / 0.1) * 0.1;
+    if (price >= 10) return Math.round(price / 0.01) * 0.01;
+    if (price >= 1) return Math.round(price / 0.001) * 0.001;
+    return Math.round(price / 0.0001) * 0.0001;
+  }
+
+  /**
    * ⭐️ [수정] 코인 심볼에 맞는 실제 네트워크 타입을 반환하는 헬퍼 함수
    * @param symbol 코인 심볼 (e.g., 'BTT', 'XRP')
    * @returns 실제 네트워크 타입 (e.g., 'TRX', 'XRP')
@@ -156,8 +173,13 @@ export class UpbitService implements IExchange {
       ord_type: type,
     };
     if (type === 'limit') {
+      const adjustedPrice = this._adjustPriceToUnit(price);
+      this.logger.log(
+        `Adjusted Upbit order price: ${price} -> ${adjustedPrice}`,
+      );
+
       params.volume = String(amount);
-      params.price = String(price);
+      params.price = String(adjustedPrice);
     } else if (type === 'market' && side === 'buy') {
       params.ord_type = 'price';
       params.price = String(price); // 시장가 매수 시 주문 총액

@@ -8,6 +8,8 @@ import {
 import WebSocket from 'ws';
 import { Subject, BehaviorSubject } from 'rxjs';
 import { ConfigService } from '@nestjs/config';
+import { Cron } from '@nestjs/schedule';
+import { ExchangeService } from 'src/common/exchange.service';
 
 export interface PriceUpdateData {
   symbol: string;
@@ -43,7 +45,12 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
   private totalRequiredConnections = 0;
   // --- [추가 끝] ---
 
-  constructor(private readonly configService: ConfigService) {
+  private upbitVolumes = new Map<string, number>();
+
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly exchangeService: ExchangeService,
+  ) {
     this._watchedSymbolsConfig = this.configService.get<WatchedSymbolConfig[]>(
       'WATCHED_SYMBOLS',
     ) || [
@@ -103,6 +110,43 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
         );
       }
     }
+  }
+
+  /**
+   * 5분마다 실행되어 모든 코인의 거래대금을 조회하고 캐시에 업데이트합니다.
+   */
+  @Cron('*/5 * * * *') // 5분 주기로 실행
+  async handleVolumeUpdate() {
+    this.logger.log('주기적인 거래대금 정보 업데이트를 시작합니다...');
+    for (const { symbol } of this._watchedSymbolsConfig) {
+      try {
+        const tickerInfo = await this.exchangeService.getTickerInfo(
+          'upbit',
+          symbol,
+        );
+        this.upbitVolumes.set(symbol, tickerInfo.quoteVolume);
+        this.logger.verbose(
+          `[거래대금 캐시] ${symbol.toUpperCase()}: ${(tickerInfo.quoteVolume / 100000000).toFixed(2)}억 KRW`,
+        );
+      } catch (error) {
+        // 429 에러가 여기서도 발생할 수 있으나, 주기가 길어 거의 발생하지 않습니다.
+        // 에러가 나더라도 다른 코인의 업데이트는 계속 진행됩니다.
+        this.logger.warn(
+          `[거래대금 캐시] ${symbol.toUpperCase()} 정보 업데이트 실패: ${error.message}`,
+        );
+      }
+      // API 호출 사이에 약간의 지연을 둡니다.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    this.logger.log('주기적인 거래대금 정보 업데이트가 완료되었습니다.');
+  }
+
+  /**
+   * 캐시된 거래대금 값을 반환합니다.
+   * @param symbol 코인 심볼
+   */
+  public getUpbitVolume(symbol: string): number | undefined {
+    return this.upbitVolumes.get(symbol);
   }
 
   private async connectToAllFeeds() {

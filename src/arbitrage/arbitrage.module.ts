@@ -1,5 +1,5 @@
 // src/arbitrage/arbitrage.module.ts
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
@@ -34,7 +34,7 @@ import { SlippageCalculatorService } from 'src/common/slippage-calculator.servic
 @Module({
   imports: [
     ConfigModule,
-    MarketDataModule,
+    forwardRef(() => MarketDataModule),
     NotificationModule,
     UpbitModule,
     BinanceModule,

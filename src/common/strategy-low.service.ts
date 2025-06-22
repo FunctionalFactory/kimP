@@ -333,7 +333,7 @@ export class StrategyLowService {
           (b) => b.currency.toUpperCase() === symbol.toUpperCase(),
         )?.available || 0;
 
-      if (currentBalance >= initialBalance + expectedAmount * 0.999) {
+      if (currentBalance >= initialBalance + expectedAmount * 0.995) {
         this.logger.log(
           `[POLLING] Deposit of ${symbol} confirmed. New balance: ${currentBalance}`,
         );

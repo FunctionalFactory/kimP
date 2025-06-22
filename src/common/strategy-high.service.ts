@@ -6,6 +6,7 @@ import { Order, OrderSide } from './exchange.interface';
 import { ConfigService } from '@nestjs/config'; // ⭐️ ConfigService import 추가
 import axios from 'axios';
 import { BinanceService } from 'src/binance/binance.service'; // ◀️ import 추가
+import { TelegramService } from './telegram.service';
 
 // 유틸리티 함수: 지정된 시간(ms)만큼 대기
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -26,6 +27,7 @@ export class StrategyHighService {
     private readonly arbitrageRecordService: ArbitrageRecordService,
     private readonly configService: ConfigService,
     private readonly binanceService: BinanceService, // ◀️ 주입 추가
+    private readonly telegramService: TelegramService, // TelegramService 주입 추가
   ) {}
 
   async handleHighPremiumFlow(
@@ -277,6 +279,17 @@ export class StrategyHighService {
         amountToSell, // 재주문 시 사용할 수량 전달
       );
 
+      if (filledSellOrder === null) {
+        const manualSellRequestMessage = `🚨 [수동 판매 요청] 🚨\n\n사이클 ID: ${cycleId}\n코인: ${symbol.toUpperCase()}\n수량: ${amountToSell}\n\n업비트에서 해당 코인의 자동 판매에 실패했습니다. 지금 즉시 업비트에서 직접 매도해주세요.`;
+
+        await this.telegramService.sendMessage(manualSellRequestMessage);
+
+        // 사이클 상태를 FAILED로 기록하되, 명확한 사유를 남김
+        throw new Error(`자동 판매 실패. 사용자 수동 개입이 필요합니다.`);
+      }
+
+      // 안됬을때 방법 생각하기
+
       // 5. 최종 손익 계산 및 DB 업데이트
       const krwProceeds =
         filledSellOrder.filledAmount * filledSellOrder.price -
@@ -393,19 +406,24 @@ export class StrategyHighService {
         }
       }
     }
-    // --- 최종 타임아웃: 모든 재시도 실패 ---
+
+    // 모든 지정가 재시도 실패 시, 에러를 던지는 대신 null을 반환하여 수동 개입을 유도
     this.logger.error(
-      `[FINAL TIMEOUT] Order failed to fill after ${this.ORDER_RETRY_LIMIT} attempts. Canceling final order ${currentOrderId}.`,
+      `[MANUAL_INTERVENTION_REQ] 지정가 주문이 ${this.ORDER_RETRY_LIMIT}회 모두 실패했습니다. (마지막 주문 ID: ${currentOrderId})`,
     );
+
+    // 마지막 지정가 주문을 취소 시도
     try {
       await this.exchangeService.cancelOrder(exchange, currentOrderId, symbol);
-    } catch (finalCancelError) {
-      this.logger.error(
-        `[FINAL TIMEOUT] CRITICAL: Failed to cancel final order ${currentOrderId}: ${finalCancelError.message}`,
+      this.logger.log(`마지막 지정가 주문(${currentOrderId})을 취소했습니다.`);
+    } catch (cancelError) {
+      this.logger.warn(
+        `최종 지정가 주문 취소 실패 (이미 체결되었거나 오류 발생): ${cancelError.message}`,
       );
     }
 
-    throw new Error(`Order for ${symbol} failed to fill after all retries.`);
+    // null을 반환하여 handleHighPremiumFlow에서 후속 처리를 하도록 함
+    return null;
   }
 
   /**
@@ -454,7 +472,7 @@ export class StrategyHighService {
         );
 
         // 출금 수수료 등을 감안하여, 예상 수량의 99.9% 이상만 들어오면 성공으로 간주
-        if (currentBalance >= initialBalance + expectedAmount * 0.999) {
+        if (currentBalance >= initialBalance + expectedAmount * 0.995) {
           this.logger.log(
             `[POLLING] Deposit of ${symbol} confirmed. New balance: ${currentBalance}`,
           );

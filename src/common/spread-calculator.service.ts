@@ -5,6 +5,7 @@ import { FeeCalculatorService } from './fee-calculator.service';
 import { HighPremiumConditionData } from '../arbitrage/high-premium-processor.service';
 import { SlippageCalculatorService } from './slippage-calculator.service'; // ⭐️ Import 추가
 import { ConfigService } from '@nestjs/config'; // ⭐️ ConfigService 추가
+import { PriceFeedService } from 'src/marketdata/price-feed.service';
 
 @Injectable()
 export class SpreadCalculatorService {
@@ -18,6 +19,7 @@ export class SpreadCalculatorService {
     private readonly feeCalculatorService: FeeCalculatorService,
     private readonly slippageCalculatorService: SlippageCalculatorService,
     private readonly configService: ConfigService,
+    private readonly priceFeedService: PriceFeedService,
   ) {
     // ⭐️ 설정값을 constructor에서 초기화합니다.
     this.MINIMUM_VOLUME_KRW =
@@ -105,22 +107,24 @@ export class SpreadCalculatorService {
 
     // --- 2단계: 거래대금(유동성) 필터 ---
     try {
-      const tickerInfo = await this.exchangeService.getTickerInfo(
-        'upbit',
-        symbol,
-      );
-      if (tickerInfo.quoteVolume < this.MINIMUM_VOLUME_KRW) {
-        this.logger.verbose(
-          `[필터링] ${symbol.toUpperCase()}: 거래대금 ${(tickerInfo.quoteVolume / 30000000).toFixed(2)}억이 기준치 미달입니다.`,
-        );
+      // 수정: PriceFeedService에 캐시된 값을 조회
+      const upbitVolume24h = this.priceFeedService.getUpbitVolume(symbol);
 
-        return null; // 거래량 미달 시 기회 아님
+      // 캐시된 값이 아직 없을 경우(프로그램 시작 직후) 필터링을 건너뜀
+      if (upbitVolume24h === undefined) {
+        this.logger.warn(
+          `[거래대금 필터] ${symbol.toUpperCase()}의 캐시된 거래대금 정보가 아직 없습니다. 필터를 건너뜁니다.`,
+        );
+      } else if (upbitVolume24h < this.MINIMUM_VOLUME_KRW) {
+        this.logger.verbose(
+          `[필터링] ${symbol.toUpperCase()}: 거래대금 ${(upbitVolume24h / 100000000).toFixed(2)}억이 기준치 미달입니다.`,
+        );
+        return null;
       }
     } catch (error) {
       this.logger.warn(
-        `[필터링] ${symbol.toUpperCase()} 거래대금 확인 실패: ${error.message}`,
+        `[필터링] ${symbol.toUpperCase()} 거래대금 확인 중 에러 발생: ${error.message}`,
       );
-
       return null;
     }
 
