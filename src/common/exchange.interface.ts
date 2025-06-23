@@ -219,4 +219,11 @@ export interface IExchange {
     amount: number,
     price?: number,
   ): Promise<Order>;
+
+  internalTransfer(
+    asset: string,
+    amount: number,
+    from: string,
+    to: string,
+  ): Promise<any>;
 }

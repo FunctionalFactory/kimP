@@ -64,6 +64,29 @@ export class StrategyHighService {
       }
       this.logger.log(`[STRATEGY_HIGH] Wallet status check OK for ${symbol}`);
 
+      // 1. 바이낸스 매수 전, 현물 지갑 잔고 확인
+      let binanceBalances = await this.exchangeService.getBalances('binance');
+      const usdtBalance =
+        binanceBalances.find((b) => b.currency === 'USDT')?.available || 0;
+
+      // 매수하려는 금액(actualInvestmentUSDT)보다 현물 지갑 잔고가 부족할 경우
+      if (usdtBalance < actualInvestmentUSDT) {
+        const amountToTransfer = actualInvestmentUSDT - usdtBalance;
+        this.logger.warn(
+          `[STRATEGY_HIGH] 현물 지갑 USDT 부족. 선물 지갑에서 ${amountToTransfer} USDT를 가져옵니다...`,
+        );
+        // 선물 -> 현물로 부족한 만큼 이체
+        await this.exchangeService.internalTransfer(
+          'binance',
+          'USDT',
+          amountToTransfer,
+          'UMFUTURE',
+          'SPOT',
+        );
+        // 잠시 대기 후 로직 계속
+        await delay(2000);
+      }
+
       // 1. 바이낸스 매수
       // TODO: getOrderBook으로 호가창 확인 후, 지정가(limit)로 주문 가격 결정
       const exchangeTickerForInfo =
@@ -192,7 +215,7 @@ export class StrategyHighService {
       // 바이낸스 내부 시스템에 잔고가 반영될 때까지 아주 잠시(1~2초) 기다려줍니다.
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
-      const binanceBalances = await this.exchangeService.getBalances('binance');
+      binanceBalances = await this.exchangeService.getBalances('binance');
       const coinBalance =
         binanceBalances.find((b) => b.currency === symbol.toUpperCase())
           ?.available || 0;

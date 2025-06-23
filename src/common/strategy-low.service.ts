@@ -109,6 +109,34 @@ export class StrategyLowService {
       this.logger.log(`[STRATEGY_LOW] Upbit buy order for ${symbol} filled.`);
 
       try {
+        // 헷지에 필요한 증거금 계산 (1배율이므로, (수량 * 가격) 만큼의 USDT가 필요)
+        const requiredMarginUSDT = filledBuyOrder.filledAmount * binancePrice;
+
+        this.logger.log(
+          `[HEDGE_LP] 숏 포지션 증거금 확보를 위해 현물 지갑에서 선물 지갑으로 ${requiredMarginUSDT.toFixed(2)} USDT 이체를 시도합니다.`,
+        );
+
+        // internalTransfer 함수를 사용하여 자산 이체
+        await this.exchangeService.internalTransfer(
+          'binance',
+          'USDT',
+          requiredMarginUSDT,
+          'SPOT', // From: 현물(Spot) 지갑
+          'UMFUTURE', // To: 선물(USDⓈ-M Futures) 지갑
+        );
+
+        await delay(2000); // 이체 후 반영될 때까지 잠시 대기
+      } catch (transferError) {
+        this.logger.error(
+          `[HEDGE_LP_FAIL] 선물 증거금 이체에 실패했습니다: ${transferError.message}`,
+        );
+        await this.telegramService.sendMessage(
+          `🚨 [긴급_LP] 사이클 ${cycleId}의 선물 증거금 이체 실패! 확인 필요!`,
+        );
+        throw transferError; // 증거금 확보 실패는 심각한 문제이므로 사이클 중단
+      }
+
+      try {
         this.logger.log(
           `[HEDGE_LP] 현물 매수 완료. 바이낸스 선물에서 ${symbol} 1x 숏 포지션 진입을 시작합니다...`,
         );

@@ -1045,4 +1045,93 @@ export class AppController {
       };
     }
   }
+
+  // <<<< 신규 추가: 지갑 간 자산 이체 테스트 API >>>>
+  @Get('/test-internal-transfer')
+  async testInternalTransfer() {
+    this.logger.warn(
+      `[API_CALL] Executing internal transfer test: 100 USDT from Spot to Futures.`,
+    );
+
+    try {
+      const asset = 'USDT';
+      const amount = 100;
+      const fromWallet = 'SPOT'; // 현물 지갑
+      const toWallet = 'UMFUTURE'; // USDⓈ-M 선물 지갑
+
+      this.logger.log(
+        `Attempting to transfer ${amount} ${asset} from ${fromWallet} to ${toWallet}...`,
+      );
+
+      const result = await this.exchangeService.internalTransfer(
+        'binance',
+        asset,
+        amount,
+        fromWallet,
+        toWallet,
+      );
+
+      this.logger.log(
+        `✅ Internal transfer successful. Transaction ID: ${result.tranId}`,
+      );
+
+      return {
+        message: 'Successfully executed internal transfer test.',
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(
+        `[TEST_FAIL] Internal transfer test failed: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      return {
+        message: 'Internal transfer test failed.',
+        error: (error as Error).message,
+      };
+    }
+  }
+
+  @Get('/test-internal-transfer-reverse')
+  async testInternalTransferReverse() {
+    this.logger.warn(
+      `[API_CALL] Executing REVERSE internal transfer test: 50 USDT from Futures to Spot.`,
+    );
+
+    try {
+      const asset = 'USDT';
+      const amount = 50; // 테스트할 금액 (선물 지갑에 이 금액 이상이 있어야 합니다)
+      const fromWallet = 'UMFUTURE'; // USDⓈ-M 선물 지갑
+      const toWallet = 'SPOT'; // 현물 지갑
+
+      this.logger.log(
+        `Attempting to transfer ${amount} ${asset} from ${fromWallet} to ${toWallet}...`,
+      );
+
+      const result = await this.exchangeService.internalTransfer(
+        'binance',
+        asset,
+        amount,
+        fromWallet,
+        toWallet,
+      );
+
+      this.logger.log(
+        `✅ REVERSE Internal transfer successful. Transaction ID: ${result.tranId}`,
+      );
+
+      return {
+        message: 'Successfully executed REVERSE internal transfer test.',
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(
+        `[TEST_FAIL] REVERSE Internal transfer test failed: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      return {
+        message: 'REVERSE Internal transfer test failed.',
+        error: (error as Error).message,
+      };
+    }
+  }
 }

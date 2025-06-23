@@ -142,28 +142,28 @@ export class FeeCalculatorService {
         rate,
       );
 
-      this.logger.log(
-        `[수수료계산_고프] --- ${symbol.toUpperCase()} 고프리미엄 수수료 상세 내역 ---`,
-      );
-      this.logger.log(
-        `  - 바이낸스 매수 수수료 (KRW): ${fees.binanceSpotBuyFeeKrw?.toFixed(2)}`,
-      );
-      this.logger.log(
-        `  - 업비트 매도 수수료 (KRW): ${fees.upbitSellFeeKrw?.toFixed(2)}`,
-      );
-      this.logger.log(
-        `  - 업비트로 전송 수수료 (KRW): ${fees.transferCoinToUpbitFeeKrw?.toFixed(2)}`,
-      );
-      this.logger.log(
-        `  - USDT 전송 수수료 (KRW): ${fees.usdtTransferFeeKrw?.toFixed(2)}`,
-      );
-      this.logger.log(
-        `  - 선물 진입 수수료 (KRW): ${fees.binanceFuturesEntryFeeKrw?.toFixed(2)}`,
-      );
-      this.logger.log(
-        `  - 선물 청산 수수료 (KRW): ${fees.binanceFuturesExitFeeKrw?.toFixed(2)}`,
-      );
-      this.logger.log(`  ----------------------------------------------------`);
+      // this.logger.log(
+      //   `[수수료계산_고프] --- ${symbol.toUpperCase()} 고프리미엄 수수료 상세 내역 ---`,
+      // );
+      // this.logger.log(
+      //   `  - 바이낸스 매수 수수료 (KRW): ${fees.binanceSpotBuyFeeKrw?.toFixed(2)}`,
+      // );
+      // this.logger.log(
+      //   `  - 업비트 매도 수수료 (KRW): ${fees.upbitSellFeeKrw?.toFixed(2)}`,
+      // );
+      // this.logger.log(
+      //   `  - 업비트로 전송 수수료 (KRW): ${fees.transferCoinToUpbitFeeKrw?.toFixed(2)}`,
+      // );
+      // this.logger.log(
+      //   `  - USDT 전송 수수료 (KRW): ${fees.usdtTransferFeeKrw?.toFixed(2)}`,
+      // );
+      // this.logger.log(
+      //   `  - 선물 진입 수수료 (KRW): ${fees.binanceFuturesEntryFeeKrw?.toFixed(2)}`,
+      // );
+      // this.logger.log(
+      //   `  - 선물 청산 수수료 (KRW): ${fees.binanceFuturesExitFeeKrw?.toFixed(2)}`,
+      // );
+      // this.logger.log(`  ----------------------------------------------------`);
     } else if (tradeDirection === 'LOW_PREMIUM_SELL_BINANCE') {
       const globalSellPriceKRW = effectiveBinancePrice * rate;
       grossProfit = (globalSellPriceKRW - effectiveUpbitPrice) * amount;

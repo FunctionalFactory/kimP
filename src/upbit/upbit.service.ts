@@ -564,4 +564,13 @@ export class UpbitService implements IExchange {
     // 업비트는 선물 거래를 지원하지 않으므로, 호출 시 에러를 발생시킵니다.
     return null;
   }
+
+  async internalTransfer(
+    asset: string,
+    amount: number,
+    from: string,
+    to: string,
+  ): Promise<any> {
+    return null;
+  }
 }

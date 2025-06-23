@@ -316,4 +316,17 @@ export class SimulationExchangeService implements IExchange, OnModuleInit {
     );
     return mockOrder;
   }
+
+  async internalTransfer(
+    asset: string,
+    amount: number,
+    from: string,
+    to: string,
+  ): Promise<any> {
+    this.logger.log(
+      `[SIMULATION] Transferring ${amount} ${asset} from ${from} to ${to}`,
+    );
+    // 시뮬레이션에서는 실제 잔고 변경 로직을 추가할 수도 있으나, 우선 성공 응답만 반환
+    return { tranId: `sim-transfer-${Date.now()}` };
+  }
 }

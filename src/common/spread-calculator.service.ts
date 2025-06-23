@@ -112,13 +112,13 @@ export class SpreadCalculatorService {
 
       // 캐시된 값이 아직 없을 경우(프로그램 시작 직후) 필터링을 건너뜀
       if (upbitVolume24h === undefined) {
-        this.logger.warn(
-          `[거래대금 필터] ${symbol.toUpperCase()}의 캐시된 거래대금 정보가 아직 없습니다. 필터를 건너뜁니다.`,
-        );
+        // this.logger.warn(
+        //   `[거래대금 필터] ${symbol.toUpperCase()}의 캐시된 거래대금 정보가 아직 없습니다. 필터를 건너뜁니다.`,
+        // );
       } else if (upbitVolume24h < this.MINIMUM_VOLUME_KRW) {
-        this.logger.verbose(
-          `[필터링] ${symbol.toUpperCase()}: 거래대금 ${(upbitVolume24h / 100000000).toFixed(2)}억이 기준치 미달입니다.`,
-        );
+        // this.logger.verbose(
+        //   `[필터링] ${symbol.toUpperCase()}: 거래대금 ${(upbitVolume24h / 100000000).toFixed(2)}억이 기준치 미달입니다.`,
+        // );
         return null;
       }
     } catch (error) {

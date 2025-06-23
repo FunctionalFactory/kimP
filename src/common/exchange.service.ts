@@ -201,4 +201,14 @@ export class ExchangeService {
       price,
     );
   }
+
+  async internalTransfer(
+    exchange: ExchangeType,
+    asset: string,
+    amount: number,
+    from: string,
+    to: string,
+  ): Promise<any> {
+    return this.getService(exchange).internalTransfer(asset, amount, from, to);
+  }
 }

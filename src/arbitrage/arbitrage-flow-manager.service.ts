@@ -50,6 +50,39 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
   }
 
   async onModuleInit() {
+    const incompleteCycles = await this.arbitrageCycleRepository.find({
+      where: {
+        status: Not(
+          In([
+            'COMPLETED',
+            'FAILED',
+            'HIGH_PREMIUM_ONLY_COMPLETED_TARGET_MISSED',
+          ]),
+        ),
+      },
+    });
+
+    if (incompleteCycles.length > 0) {
+      this.logger.warn(
+        `[RECOVERY] 미완료된 사이클 ${incompleteCycles.length}개를 발견했습니다. 상태 복구를 시도합니다.`,
+      );
+      // 여러 개가 있더라도, 가장 오래된 하나만 복구 대상으로 삼는 것이 안전합니다.
+      const cycleToRecover = incompleteCycles.sort(
+        (a, b) =>
+          new Date(a.startTime).getTime() - new Date(b.startTime).getTime(),
+      )[0];
+
+      await this.recoverCycle(cycleToRecover);
+    } else {
+      this.logger.log(
+        '[RECOVERY] 미완료된 사이클이 없습니다. 정상 모드로 시작합니다.',
+      );
+      // 미완료 사이클이 없을 때만 포트폴리오 초기화 로직 실행
+      await this.initializePortfolio();
+    }
+  }
+
+  private async initializePortfolio() {
     this.logger.log(
       'ArbitrageFlowManagerService가 초기화되었습니다. 포트폴리오 상태를 확인합니다...',
     );
@@ -144,27 +177,6 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
       this.logger.error(
         '초기 자본금이 0 이하여서 포트폴리오 로그를 생성하지 못했습니다.',
       );
-    }
-
-    const incompleteCycles = await this.arbitrageCycleRepository.find({
-      where: {
-        status: Not(
-          In([
-            'COMPLETED',
-            'FAILED',
-            'HIGH_PREMIUM_ONLY_COMPLETED_TARGET_MISSED',
-          ]),
-        ),
-      },
-    });
-
-    if (incompleteCycles.length > 0) {
-      this.logger.warn(
-        `Found ${incompleteCycles.length} incomplete cycle(s). Attempting to recover...`,
-      );
-      for (const cycle of incompleteCycles) {
-        await this.recoverCycle(cycle);
-      }
     }
   }
 
@@ -279,6 +291,9 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
           // IDLE 상태에서 처음으로 '진짜' 기회를 찾았으므로 결정 시간 타이머 시작
           this.cycleStateService.setBestOpportunity(opportunity);
           this.cycleStateService.startDecisionWindow(async () => {
+            const finalOpportunityCandidate =
+              this.cycleStateService.getBestOpportunity();
+
             const finalOpportunity =
               this.cycleStateService.getBestOpportunity();
             if (!finalOpportunity) {
@@ -287,6 +302,103 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
               );
               this.cycleStateService.resetCycleState();
               return;
+            }
+
+            this.logger.log(
+              `[FINAL_CHECK] 최종 후보 ${finalOpportunityCandidate.symbol.toUpperCase()}에 대한 마지막 실시간 검증을 시작합니다...`,
+            );
+
+            try {
+              // 1. 현재 시점의 최신 가격 정보로 다시 한번 SpreadCalculatorService를 호출
+              const liveUpbitPrice = this.priceFeedService.getUpbitPrice(
+                finalOpportunityCandidate.symbol,
+              );
+              const liveBinancePrice = this.priceFeedService.getBinancePrice(
+                finalOpportunityCandidate.symbol,
+              );
+
+              // 만약 그 짧은 순간에 가격 정보를 더 이상 수신할 수 없게 되면 안전하게 종료
+              if (!liveUpbitPrice || !liveBinancePrice) {
+                this.logger.warn(
+                  `[FINAL_CHECK_FAIL] 최종 검증 실패: ${finalOpportunityCandidate.symbol}의 실시간 가격 정보가 없습니다.`,
+                );
+                this.cycleStateService.resetCycleState();
+                return;
+              }
+
+              // 2. 포트폴리오를 다시 조회하여 최신 투자금을 계산
+              const latestPortfolio =
+                await this.portfolioLogService.getLatestPortfolio();
+              const totalCapitalKRW =
+                latestPortfolio?.total_balance_krw ||
+                this.configService.get<number>('INITIAL_CAPITAL_KRW');
+              const investmentKRW =
+                Number(totalCapitalKRW) *
+                (this.configService.get<number>('INVESTMENT_PERCENTAGE') /
+                  100 || 0.1);
+              const rate = this.exchangeService.getUSDTtoKRW();
+              if (rate === 0) {
+                this.logger.warn(
+                  '[FINAL_CHECK_FAIL] 환율 정보를 사용할 수 없어 최종 검증을 건너뜁니다.',
+                );
+                this.cycleStateService.resetCycleState();
+                return;
+              }
+              const investmentUSDT = investmentKRW / rate;
+
+              // 3. 최신 데이터로 최종 기회 검증
+              const verifiedOpportunity =
+                await this.spreadCalculatorService.calculateSpread({
+                  symbol: finalOpportunityCandidate.symbol,
+                  upbitPrice: liveUpbitPrice,
+                  binancePrice: liveBinancePrice,
+                  investmentUSDT: investmentUSDT,
+                });
+
+              // 4. 최종 검증에서 기회가 유효하지 않다고 판단되면 (프리미엄 변동 등), 사이클을 리셋하고 종료
+              if (!verifiedOpportunity) {
+                this.logger.log(
+                  `[FINAL_CHECK_FAIL] ${finalOpportunityCandidate.symbol.toUpperCase()}이(가) 최종 검증을 통과하지 못했습니다. 기회를 폐기합니다.`,
+                );
+                this.cycleStateService.resetCycleState();
+                return;
+              }
+
+              // 5. 최종 검증까지 통과한 '진짜' 기회로만 거래 시작
+              this.logger.log(
+                `[FINAL_CHECK_SUCCESS] ${verifiedOpportunity.symbol.toUpperCase()} 최종 검증 통과. 거래를 시작합니다.`,
+              );
+              const hpResult =
+                await this.highPremiumProcessorService.processHighPremiumOpportunity(
+                  verifiedOpportunity, // 검증된 최종 기회를 전달
+                );
+
+              // 결과 처리 로직은 기존과 동일
+              if (
+                hpResult.success &&
+                hpResult.nextStep === 'awaitLowPremium' &&
+                hpResult.cycleId
+              ) {
+                this.logger.log(
+                  `High premium processing successful (Cycle: ${hpResult.cycleId}). Awaiting low premium processing.`,
+                );
+              } else if (!hpResult.success) {
+                this.logger.error(
+                  `High premium processing failed. Triggering completion if cycleId exists.`,
+                );
+                if (hpResult.cycleId) {
+                  await this.cycleCompletionService.completeCycle(
+                    hpResult.cycleId,
+                  );
+                } else {
+                  this.cycleStateService.resetCycleState();
+                }
+              }
+            } catch (error) {
+              this.logger.error(
+                `[FINAL_CHECK_ERROR] 최종 검증 중 예외 발생: ${error.message}`,
+              );
+              this.cycleStateService.resetCycleState();
             }
 
             const hpResult =
@@ -339,9 +451,9 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
       this.cycleStateService.currentCycleExecutionStatus !==
       CycleExecutionStatus.AWAITING_LOW_PREMIUM
     ) {
-      // this.logger.verbose(
-      //   `[FM_ProcessLowPremium] Not in AWAITING_LOW_PREMIUM state, skipping. Current: ${CycleExecutionStatus[this.cycleStateService.currentCycleExecutionStatus]}`,
-      // );
+      this.logger.verbose(
+        `[FM_ProcessLowPremium] Not in AWAITING_LOW_PREMIUM state, skipping. Current: ${CycleExecutionStatus[this.cycleStateService.currentCycleExecutionStatus]}`,
+      );
       return;
     }
 
@@ -354,9 +466,9 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
       );
       await this.cycleCompletionService.completeCycle(result.cycleId);
     } else {
-      // this.logger.verbose(
-      //   `[FM_ProcessLowPremium] LowPremiumProcessor did not yield an actionable result or cycleId this time.`,
-      // );
+      this.logger.verbose(
+        `[FM_ProcessLowPremium] LowPremiumProcessor did not yield an actionable result or cycleId this time.`,
+      );
     }
   }
 }

@@ -26,6 +26,7 @@ export class BinanceService implements IExchange {
   private readonly serverUrl = 'https://api.binance.com';
   private readonly futuresServerUrl = 'https://fapi.binance.com';
   private symbolInfoCache = new Map<string, any>();
+  private futuresSymbolInfoCache = new Map<string, any>();
 
   constructor(private readonly configService: ConfigService) {
     this.logger.error('<<<<< BinanceService (REAL) IS LOADED >>>>>');
@@ -54,6 +55,38 @@ export class BinanceService implements IExchange {
           `[HEDGE_INIT] ${symbol} 레버리지 설정 실패: ${error.message}`,
         );
       }
+    }
+  }
+
+  private async _getFuturesSymbolInfo(symbol: string): Promise<any> {
+    const market = `${this.getExchangeTicker(symbol).toUpperCase()}USDT`;
+    if (this.futuresSymbolInfoCache.has(market)) {
+      return this.futuresSymbolInfoCache.get(market);
+    }
+
+    try {
+      this.logger.log(
+        `[FUTURES_INFO] Fetching futures exchange info for ${market}...`,
+      );
+      const response = await axios.get(
+        `${this.futuresServerUrl}/fapi/v1/exchangeInfo`,
+      );
+      const allSymbols = response.data.symbols;
+      // 모든 심볼 정보를 캐시에 저장하여 반복적인 API 호출을 방지
+      allSymbols.forEach((s) => this.futuresSymbolInfoCache.set(s.symbol, s));
+
+      const symbolInfo = this.futuresSymbolInfoCache.get(market);
+
+      if (symbolInfo) {
+        return symbolInfo;
+      } else {
+        throw new Error(`Futures symbol info for ${market} not found.`);
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to fetch futures exchange info: ${error.message}`,
+      );
+      throw error;
     }
   }
 
@@ -617,7 +650,6 @@ export class BinanceService implements IExchange {
     }
   }
 
-  // <<<< 신규 추가: IExchange 인터페이스를 만족시키는 선물 주문 메소드 구현 >>>>
   async createFuturesOrder(
     symbol: string,
     side: OrderSide,
@@ -625,17 +657,41 @@ export class BinanceService implements IExchange {
     amount: number,
     price?: number,
   ): Promise<Order> {
+    // 1. 선물 시장의 거래 규칙을 조회합니다.
+    const symbolInfo = await this._getFuturesSymbolInfo(symbol);
+    const quantityPrecision = symbolInfo.quantityPrecision; // 허용되는 소수점 자릿수
+
+    if (quantityPrecision === undefined) {
+      throw new Error(
+        `Could not determine quantityPrecision for ${symbol} futures.`,
+      );
+    }
+
+    // 2. 주문 수량을 선물 시장의 정밀도에 맞게 조정합니다.
+    const adjustedAmount = parseFloat(amount.toFixed(quantityPrecision));
+    this.logger.log(
+      `[FUTURES_ORDER] 수량 정밀도 조정: Raw: ${amount} -> Adjusted: ${adjustedAmount}`,
+    );
+
+    // 조정된 수량이 0 이하면 주문 불가
+    if (adjustedAmount <= 0) {
+      throw new Error(
+        `Adjusted quantity (${adjustedAmount}) is too small to place a futures order.`,
+      );
+    }
+
     const endpoint = '/fapi/v1/order';
     const params: any = {
       symbol: `${symbol.toUpperCase()}USDT`,
       side: side.toUpperCase(),
       type: type.toUpperCase(),
-      quantity: amount,
+      quantity: adjustedAmount, // ◀︎◀︎ 조정된 수량을 사용
       timestamp: Date.now(),
     };
 
     if (type.toUpperCase() === 'LIMIT') {
       if (!price) throw new Error('Limit order requires a price.');
+      // 가격 정밀도 조정도 필요 시 추가 가능 (pricePrecision 사용)
       params.price = price;
       params.timeInForce = 'GTC';
     }
@@ -648,13 +704,60 @@ export class BinanceService implements IExchange {
       const response = await axios.post(url, null, {
         headers: { 'X-MBX-APIKEY': this.apiKey },
       });
-      // 선물 주문 응답도 현물과 형식이 유사하므로 기존 변환 함수 재사용 가능
       return this.transformBinanceOrder(response.data);
     } catch (error) {
       const errorMessage = error.response?.data?.msg || error.message;
       this.logger.error(
         `[Binance-FUTURES] 선물 주문 생성 실패: ${errorMessage}`,
       );
+      throw new Error(`Binance API Error: ${errorMessage}`);
+    }
+  }
+
+  async internalTransfer(
+    asset: string,
+    amount: number,
+    from: 'SPOT' | 'UMFUTURE',
+    to: 'SPOT' | 'UMFUTURE',
+  ): Promise<any> {
+    // 바이낸스 API에서 사용하는 이체 타입 코드
+    // 현물 -> 선물: 1, 선물 -> 현물: 2
+    let transferType: string;
+    // 바이낸스 API가 요구하는 정확한 문자열 타입으로 변환
+    if (from === 'SPOT' && to === 'UMFUTURE') {
+      transferType = 'MAIN_UMFUTURE'; // 현물 -> 선물
+    } else if (from === 'UMFUTURE' && to === 'SPOT') {
+      transferType = 'UMFUTURE_MAIN'; // 선물 -> 현물
+    } else {
+      throw new Error('Unsupported transfer direction');
+    }
+
+    const adjustedAmount = parseFloat(amount.toFixed(8));
+
+    const endpoint = '/sapi/v1/asset/transfer';
+
+    const params = {
+      asset,
+      amount: adjustedAmount,
+      type: transferType,
+      timestamp: Date.now(),
+    };
+
+    const queryString = querystring.stringify(params);
+    const signature = this._generateSignature(queryString);
+    const url = `${this.serverUrl}${endpoint}?${queryString}&signature=${signature}`;
+
+    try {
+      const response = await axios.post(url, null, {
+        headers: { 'X-MBX-APIKEY': this.apiKey },
+      });
+      this.logger.log(
+        `[TRANSFER] ${amount} ${asset}를 ${from}에서 ${to}로 이체 완료. TransId: ${response.data.tranId}`,
+      );
+      return response.data;
+    } catch (error) {
+      const errorMessage = error.response?.data?.msg || error.message;
+      this.logger.error(`[TRANSFER_FAIL] 자산 이체 실패: ${errorMessage}`);
       throw new Error(`Binance API Error: ${errorMessage}`);
     }
   }
