@@ -281,4 +281,39 @@ export class SimulationExchangeService implements IExchange, OnModuleInit {
       takerCommission: 0.001, // 0.1%
     };
   }
+
+  async createFuturesOrder(
+    symbol: string,
+    side: OrderSide,
+    type: OrderType,
+    amount: number,
+    price?: number,
+  ): Promise<Order> {
+    const orderPrice = price || 700; // 시장가일 경우 임의의 가격
+    this.logger.log(
+      `[SIMULATION_FUTURES] Creating ${side} ${type} futures order for ${amount} ${symbol} at ${orderPrice}`,
+    );
+
+    // 시뮬레이션에서는 실제 잔고 변화 없이 성공 응답만 반환
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const mockOrder: Order = {
+      id: `sim-futures-order-${Date.now()}`,
+      symbol: `${symbol.toUpperCase()}USDT`,
+      type,
+      side,
+      price: orderPrice,
+      amount,
+      filledAmount: amount, // 선물 주문도 즉시 체결되었다고 가정
+      status: 'filled',
+      timestamp: new Date(),
+      fee: { currency: 'USDT', cost: amount * orderPrice * 0.0004 }, // 선물 수수료율 적용
+    };
+
+    // 선물 주문은 별도로 저장하지 않고, 성공 응답만 반환
+    this.logger.log(
+      `[SIMULATION_FUTURES] Futures order ${mockOrder.id} has been filled.`,
+    );
+    return mockOrder;
+  }
 }

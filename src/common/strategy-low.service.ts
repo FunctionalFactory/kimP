@@ -4,6 +4,8 @@ import { ArbitrageRecordService } from '../db/arbitrage-record.service';
 import { ExchangeService, ExchangeType } from './exchange.service';
 import { Order, OrderSide } from './exchange.interface';
 import { ConfigService } from '@nestjs/config'; // ⭐️ ConfigService import 추가
+import axios from 'axios';
+import { TelegramService } from './telegram.service';
 
 // 유틸리티 함수: 지정된 시간(ms)만큼 대기
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,6 +26,7 @@ export class StrategyLowService {
     private readonly exchangeService: ExchangeService,
     private readonly arbitrageRecordService: ArbitrageRecordService,
     private readonly configService: ConfigService,
+    private readonly telegramService: TelegramService, // TelegramService 주입
   ) {}
 
   async handleLowPremiumFlow(
@@ -35,6 +38,8 @@ export class StrategyLowService {
     investmentKRW: number,
   ): Promise<void> {
     this.logger.log(`[STRATEGY_LOW] Starting REAL trade for cycle ${cycleId}`);
+
+    let shortPositionAmount = 0;
 
     try {
       this.logger.log(
@@ -103,6 +108,36 @@ export class StrategyLowService {
       });
       this.logger.log(`[STRATEGY_LOW] Upbit buy order for ${symbol} filled.`);
 
+      try {
+        this.logger.log(
+          `[HEDGE_LP] 현물 매수 완료. 바이낸스 선물에서 ${symbol} 1x 숏 포지션 진입을 시작합니다...`,
+        );
+        shortPositionAmount = filledBuyOrder.filledAmount; // 헷지할 수량 기록
+
+        const shortOrder = await this.exchangeService.createFuturesOrder(
+          'binance',
+          symbol,
+          'sell', // 숏 포지션 진입
+          'market',
+          shortPositionAmount,
+        );
+
+        this.logger.log(
+          `[HEDGE_LP] 숏 포지션 진입 성공. TxID: ${shortOrder.id}`,
+        );
+        await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
+          lp_short_entry_tx_id: shortOrder.id, // DB에 기록
+        });
+      } catch (hedgeError) {
+        this.logger.error(
+          `[HEDGE_LP_FAIL] 숏 포지션 진입에 실패했습니다: ${hedgeError.message}`,
+        );
+        await this.telegramService.sendMessage(
+          `🚨 [긴급_LP] 사이클 ${cycleId}의 ${symbol} 헷지 진입 실패! 확인 필요!`,
+        );
+        // throw hedgeError; // 필요 시 사이클 중단
+      }
+
       // 2. 바이낸스로 출금
       const { address: binanceAddress, tag: binanceTag } =
         await this.exchangeService.getDepositAddress('binance', symbol);
@@ -148,29 +183,46 @@ export class StrategyLowService {
 
       // 4. 바이낸스 매도
       const sellAmount = filledBuyOrder.filledAmount; // 판매할 수량
-      const sellOrder = await this.exchangeService.createOrder(
-        'binance',
-        symbol,
-        'limit',
-        'sell',
-        sellAmount,
-        binancePrice,
-      );
-      const filledSellOrder = await this.pollOrderStatus(
+      const filledSellOrder = await this.aggressiveSellOnBinance(
         cycleId,
-        'binance',
-        sellOrder.id,
         symbol,
-        binancePrice,
-        'sell',
         sellAmount,
       );
+
       await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
         status: 'LP_SOLD',
       });
       this.logger.log(
         `[STRATEGY_LOW] Binance sell order for ${symbol} filled.`,
       );
+
+      try {
+        this.logger.log(
+          `[HEDGE_LP] 현물 매도 완료. ${symbol} 숏 포지션 종료를 시작합니다...`,
+        );
+
+        const closeShortOrder = await this.exchangeService.createFuturesOrder(
+          'binance',
+          symbol,
+          'buy', // 숏 포지션 종료는 'BUY'
+          'market',
+          shortPositionAmount, // 진입했던 수량 그대로 청산
+        );
+
+        this.logger.log(
+          `[HEDGE_LP] 숏 포지션 종료 성공. TxID: ${closeShortOrder.id}`,
+        );
+        await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
+          lp_short_close_tx_id: closeShortOrder.id, // DB에 기록
+        });
+      } catch (hedgeError) {
+        this.logger.error(
+          `[HEDGE_LP_FAIL] 숏 포지션 종료에 실패했습니다: ${hedgeError.message}`,
+        );
+        await this.telegramService.sendMessage(
+          `🚨 [긴급_LP] 사이클 ${cycleId}의 ${symbol} 숏 포지션 종료 실패! 수동 청산 필요!`,
+        );
+      }
 
       // 5. 최종 사이클 결과 계산 및 DB 업데이트
       const existingCycle =
@@ -210,6 +262,76 @@ export class StrategyLowService {
         status: 'FAILED',
         errorDetails: `Low Premium Leg Failed: ${(error as Error).message}`,
       });
+    }
+  }
+
+  private async aggressiveSellOnBinance(
+    cycleId: string,
+    symbol: string,
+    amountToSell: number,
+  ): Promise<Order> {
+    this.logger.log(
+      `[AGGRESSIVE_SELL_BINANCE] ${amountToSell} ${symbol} 전량 매도를 시작합니다.`,
+    );
+    const market = `${symbol.toUpperCase()}USDT`;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        this.logger.verbose(
+          `[AGGRESSIVE_SELL_BINANCE] 현재가 조회를 시도합니다...`,
+        );
+        const tickerResponse = await axios.get(
+          `https://api.binance.com/api/v3/ticker/price?symbol=${market}`,
+        );
+        const currentPrice = parseFloat(tickerResponse.data.price);
+
+        if (!currentPrice) {
+          this.logger.warn(
+            `[AGGRESSIVE_SELL_BINANCE] 현재가 조회 실패. 5초 후 재시도합니다.`,
+          );
+          await delay(5000);
+          continue;
+        }
+
+        this.logger.log(
+          `[AGGRESSIVE_SELL_BINANCE] 현재가: ${currentPrice} USDT. 지정가 매도를 시도합니다.`,
+        );
+        const sellOrder = await this.exchangeService.createOrder(
+          'binance',
+          symbol,
+          'limit',
+          'sell',
+          amountToSell,
+          currentPrice,
+        );
+
+        const startTime = Date.now();
+        while (Date.now() - startTime < 10000) {
+          const orderStatus = await this.exchangeService.getOrder(
+            'binance',
+            sellOrder.id,
+            symbol,
+          );
+          if (orderStatus.status === 'filled') {
+            this.logger.log(
+              `[AGGRESSIVE_SELL_BINANCE] 매도 성공! Order ID: ${orderStatus.id}`,
+            );
+            return orderStatus;
+          }
+          await delay(2000);
+        }
+
+        this.logger.log(
+          `[AGGRESSIVE_SELL_BINANCE] 10초 내 미체결. 주문 취소 후 재시도. Order ID: ${sellOrder.id}`,
+        );
+        await this.exchangeService.cancelOrder('binance', sellOrder.id, symbol);
+      } catch (error) {
+        this.logger.error(
+          `[AGGRESSIVE_SELL_BINANCE] 매도 시도 중 오류: ${error.message}. 5초 후 재시도합니다.`,
+        );
+      }
+      await delay(5000);
     }
   }
 

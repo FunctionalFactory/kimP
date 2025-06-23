@@ -552,4 +552,16 @@ export class UpbitService implements IExchange {
       throw new Error(`Upbit API Error: ${errorMessage}`);
     }
   }
+
+  async createFuturesOrder(
+    symbol: string,
+    side: OrderSide,
+    type: OrderType,
+    amount: number,
+    price?: number,
+  ): Promise<Order> {
+    this.logger.error('[Upbit-REAL] Upbit does not support futures trading.');
+    // 업비트는 선물 거래를 지원하지 않으므로, 호출 시 에러를 발생시킵니다.
+    return null;
+  }
 }
