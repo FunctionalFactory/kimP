@@ -6,6 +6,7 @@ import { Order, OrderSide } from './exchange.interface';
 import { ConfigService } from '@nestjs/config'; // ⭐️ ConfigService import 추가
 import axios from 'axios';
 import { TelegramService } from './telegram.service';
+import { WithdrawalConstraintService } from './withdrawal-constraint.service';
 
 // 유틸리티 함수: 지정된 시간(ms)만큼 대기
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -27,6 +28,7 @@ export class StrategyLowService {
     private readonly arbitrageRecordService: ArbitrageRecordService,
     private readonly configService: ConfigService,
     private readonly telegramService: TelegramService, // TelegramService 주입
+    private readonly withdrawalConstraintService: WithdrawalConstraintService,
   ) {}
 
   async handleLowPremiumFlow(
@@ -40,6 +42,8 @@ export class StrategyLowService {
     this.logger.log(`[STRATEGY_LOW] Starting REAL trade for cycle ${cycleId}`);
 
     let shortPositionAmount = 0;
+    let transferredToFutures = false; // 🔥 추가: 선물로 이체했는지 추적
+    let transferAmount = 0; // �� 추가: 이체한 금액 추적
 
     try {
       this.logger.log(
@@ -109,8 +113,8 @@ export class StrategyLowService {
       this.logger.log(`[STRATEGY_LOW] Upbit buy order for ${symbol} filled.`);
 
       try {
-        // 헷지에 필요한 증거금 계산 (1배율이므로, (수량 * 가격) 만큼의 USDT가 필요)
         const requiredMarginUSDT = filledBuyOrder.filledAmount * binancePrice;
+        transferAmount = requiredMarginUSDT; // 🔥 이체 금액 기록
 
         this.logger.log(
           `[HEDGE_LP] 숏 포지션 증거금 확보를 위해 현물 지갑에서 선물 지갑으로 ${requiredMarginUSDT.toFixed(2)} USDT 이체를 시도합니다.`,
@@ -124,21 +128,11 @@ export class StrategyLowService {
           'SPOT', // From: 현물(Spot) 지갑
           'UMFUTURE', // To: 선물(USDⓈ-M Futures) 지갑
         );
-
+        transferredToFutures = true; // 🔥 이체 완료 표시
         await delay(2000); // 이체 후 반영될 때까지 잠시 대기
-      } catch (transferError) {
-        this.logger.error(
-          `[HEDGE_LP_FAIL] 선물 증거금 이체에 실패했습니다: ${transferError.message}`,
-        );
-        await this.telegramService.sendMessage(
-          `🚨 [긴급_LP] 사이클 ${cycleId}의 선물 증거금 이체 실패! 확인 필요!`,
-        );
-        throw transferError; // 증거금 확보 실패는 심각한 문제이므로 사이클 중단
-      }
 
-      try {
         this.logger.log(
-          `[HEDGE_LP] 현물 매수 완료. 바이낸스 선물에서 ${symbol} 1x 숏 포지션 진입을 시작합니다...`,
+          `[HEDGE_LP] 증거금 이체 완료. ${symbol} 1x 숏 포지션 진입을 시작합니다...`,
         );
         shortPositionAmount = filledBuyOrder.filledAmount; // 헷지할 수량 기록
 
@@ -158,12 +152,12 @@ export class StrategyLowService {
         });
       } catch (hedgeError) {
         this.logger.error(
-          `[HEDGE_LP_FAIL] 숏 포지션 진입에 실패했습니다: ${hedgeError.message}`,
+          `[HEDGE_LP_FAIL] 선물 증거금 이체에 실패했습니다: ${hedgeError.message}`,
         );
         await this.telegramService.sendMessage(
-          `🚨 [긴급_LP] 사이클 ${cycleId}의 ${symbol} 헷지 진입 실패! 확인 필요!`,
+          `🚨 [긴급_LP] 사이클 ${cycleId}의 선물 증거금 이체 실패! 확인 필요!`,
         );
-        // throw hedgeError; // 필요 시 사이클 중단
+        // throw hedgeError; // 증거금 확보 실패는 심각한 문제이므로 사이클 중단
       }
 
       // 2. 바이낸스로 출금
@@ -173,11 +167,22 @@ export class StrategyLowService {
       const { net_type: upbitNetType } =
         await this.exchangeService.getDepositAddress('upbit', symbol);
 
+      const amountToWithdraw = filledBuyOrder.filledAmount;
+      const adjustedAmountToWithdraw =
+        this.withdrawalConstraintService.adjustWithdrawalAmount(
+          symbol,
+          amountToWithdraw,
+        );
+
+      this.logger.log(
+        `[STRATEGY_LOW] 출금 수량 조정: ${amountToWithdraw} → ${adjustedAmountToWithdraw} ${symbol}`,
+      );
+
       const withdrawalResult = await this.exchangeService.withdraw(
         'upbit',
         symbol,
         binanceAddress,
-        filledBuyOrder.filledAmount.toString(),
+        adjustedAmountToWithdraw.toString(),
         binanceTag,
         upbitNetType,
       );
@@ -240,10 +245,16 @@ export class StrategyLowService {
         this.logger.log(
           `[HEDGE_LP] 숏 포지션 종료 성공. TxID: ${closeShortOrder.id}`,
         );
+        if (transferredToFutures) {
+          await this.returnFundsToSpot(cycleId, transferAmount);
+        }
         await this.arbitrageRecordService.updateArbitrageCycle(cycleId, {
           lp_short_close_tx_id: closeShortOrder.id, // DB에 기록
         });
       } catch (hedgeError) {
+        if (transferredToFutures) {
+          await this.returnFundsToSpot(cycleId, transferAmount, true);
+        }
         this.logger.error(
           `[HEDGE_LP_FAIL] 숏 포지션 종료에 실패했습니다: ${hedgeError.message}`,
         );
@@ -282,6 +293,10 @@ export class StrategyLowService {
       });
       this.logger.log(`✅ [STRATEGY_LOW] Cycle ${cycleId} fully COMPLETED.`);
     } catch (error) {
+      if (transferredToFutures) {
+        await this.returnFundsToSpot(cycleId, transferAmount, true);
+      }
+
       this.logger.error(
         `[STRATEGY_LOW] CRITICAL ERROR during cycle ${cycleId}: ${(error as Error).message}`,
         (error as Error).stack,
@@ -290,6 +305,62 @@ export class StrategyLowService {
         status: 'FAILED',
         errorDetails: `Low Premium Leg Failed: ${(error as Error).message}`,
       });
+    }
+  }
+  // �� 추가: 자금 반환 로직을 별도 메서드로 분리
+  private async returnFundsToSpot(
+    cycleId: string,
+    amount: number,
+    isErrorCase: boolean = false,
+  ): Promise<void> {
+    const context = isErrorCase ? '[ERROR_RETURN]' : '[HEDGE_LP]';
+    try {
+      const futuresBalances = await this.exchangeService.getFuturesBalances(
+        'binance',
+        'UMFUTURE',
+      );
+      const futuresUsdtBalance =
+        futuresBalances.find((b) => b.currency === 'USDT')?.available || 0;
+
+      this.logger.log(
+        `${context} 선물 지갑 USDT 잔고: ${futuresUsdtBalance.toFixed(6)} USDT`,
+      );
+
+      const actualReturnAmount = Math.min(futuresUsdtBalance, amount);
+
+      if (actualReturnAmount <= 0) {
+        this.logger.warn(
+          `${context} 선물 지갑에 반환할 USDT가 없습니다. (잔고: ${futuresUsdtBalance.toFixed(6)} USDT)`,
+        );
+        return;
+      }
+
+      this.logger.log(
+        `${context} 선물 지갑에서 현물 지갑으로 ${actualReturnAmount.toFixed(6)} USDT를 반환합니다...`,
+      );
+
+      await this.exchangeService.internalTransfer(
+        'binance',
+        'USDT',
+        actualReturnAmount,
+        'UMFUTURE', // From: 선물 지갑
+        'SPOT', // To: 현물 지갑
+      );
+
+      this.logger.log(`${context} 현물 지갑으로 자금 반환 완료.`);
+      if (actualReturnAmount < amount) {
+        const difference = amount - actualReturnAmount;
+        this.logger.warn(
+          `${context} 반환 금액이 요청 금액보다 적습니다. 차이: ${difference.toFixed(6)} USDT (수수료/가격변동)`,
+        );
+      }
+    } catch (returnError) {
+      this.logger.error(
+        `${context} 현물 지갑으로 자금 반환 실패: ${returnError.message}`,
+      );
+      await this.telegramService.sendMessage(
+        `⚠️ [자금 반환 실패] 사이클 ${cycleId}의 현물 지갑 자금 반환에 실패했습니다. 수동 확인 필요.`,
+      );
     }
   }
 
@@ -302,6 +373,8 @@ export class StrategyLowService {
       `[AGGRESSIVE_SELL_BINANCE] ${amountToSell} ${symbol} 전량 매도를 시작합니다.`,
     );
     const market = `${symbol.toUpperCase()}USDT`;
+
+    let lastOrderPrice = 0; // �� 추가: 마지막 주문 가격 추적
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -322,6 +395,40 @@ export class StrategyLowService {
           continue;
         }
 
+        if (lastOrderPrice === currentPrice) {
+          this.logger.log(
+            `[AGGRESSIVE_SELL_BINANCE] 현재가(${currentPrice})가 마지막 주문가(${lastOrderPrice})와 동일합니다. 5초 후 재확인합니다.`,
+          );
+          await delay(5000);
+          continue;
+        }
+
+        //매도 시도 전 실제 잔고 재확인
+        const binanceBalances =
+          await this.exchangeService.getBalances('binance');
+        const actualBalance =
+          binanceBalances.find((b) => b.currency === symbol.toUpperCase())
+            ?.available || 0;
+
+        this.logger.log(
+          `[AGGRESSIVE_SELL_BINANCE] 실제 ${symbol} 잔고: ${actualBalance}, 매도 시도 수량: ${amountToSell}`,
+        );
+
+        const adjustedAmountToSell = Math.min(actualBalance, amountToSell);
+
+        if (adjustedAmountToSell <= 0) {
+          this.logger.warn(
+            `[AGGRESSIVE_SELL_BINANCE] ${symbol} 잔고가 없습니다. 매도를 중단합니다.`,
+          );
+          throw new Error(`No ${symbol} balance available for selling.`);
+        }
+
+        if (adjustedAmountToSell < amountToSell) {
+          this.logger.warn(
+            `[AGGRESSIVE_SELL_BINANCE] 실제 잔고(${actualBalance})가 요청 수량(${amountToSell})보다 적습니다. 조정된 수량(${adjustedAmountToSell})으로 매도합니다.`,
+          );
+        }
+
         this.logger.log(
           `[AGGRESSIVE_SELL_BINANCE] 현재가: ${currentPrice} USDT. 지정가 매도를 시도합니다.`,
         );
@@ -330,9 +437,11 @@ export class StrategyLowService {
           symbol,
           'limit',
           'sell',
-          amountToSell,
+          adjustedAmountToSell,
           currentPrice,
         );
+
+        lastOrderPrice = currentPrice;
 
         const startTime = Date.now();
         while (Date.now() - startTime < 10000) {
@@ -343,7 +452,7 @@ export class StrategyLowService {
           );
           if (orderStatus.status === 'filled') {
             this.logger.log(
-              `[AGGRESSIVE_SELL_BINANCE] 매도 성공! Order ID: ${orderStatus.id}`,
+              `[AGGRESSIVE_SELL_BINANCE] 매도 성공! Order ID: ${orderStatus.id}, 체결 수량: ${orderStatus.filledAmount}`,
             );
             return orderStatus;
           }
@@ -355,6 +464,21 @@ export class StrategyLowService {
         );
         await this.exchangeService.cancelOrder('binance', sellOrder.id, symbol);
       } catch (error) {
+        const errorMessage = error.message.toLowerCase();
+        // 재시도가 무의미한 특정 에러 키워드들
+        const fatalErrors = [
+          'insufficient funds',
+          'invalid access key',
+          'minimum total',
+          'no balance available', // �� 추가: 잔고 부족 에러
+        ];
+        if (fatalErrors.some((keyword) => errorMessage.includes(keyword))) {
+          this.logger.error(
+            `[AGGRESSIVE_SELL_BINANCE] 치명적 오류 발생, 매도를 중단합니다: ${error.message}`,
+          );
+          // 여기서 에러를 다시 던져서 handleLowPremiumFlow의 메인 catch 블록으로 넘김
+          throw error;
+        }
         this.logger.error(
           `[AGGRESSIVE_SELL_BINANCE] 매도 시도 중 오류: ${error.message}. 5초 후 재시도합니다.`,
         );

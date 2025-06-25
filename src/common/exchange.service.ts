@@ -201,6 +201,12 @@ export class ExchangeService {
       price,
     );
   }
+  async getFuturesBalances(
+    exchange: ExchangeType,
+    walletType: 'SPOT' | 'UMFUTURE',
+  ): Promise<Balance[]> {
+    return this.getService(exchange).getFuturesBalances(walletType);
+  }
 
   async internalTransfer(
     exchange: ExchangeType,

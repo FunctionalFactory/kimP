@@ -565,6 +565,12 @@ export class UpbitService implements IExchange {
     return null;
   }
 
+  async getFuturesBalances(
+    walletType: 'SPOT' | 'UMFUTURE',
+  ): Promise<Balance[]> {
+    return;
+  }
+
   async internalTransfer(
     asset: string,
     amount: number,

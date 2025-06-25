@@ -46,6 +46,7 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
   // --- [추가 끝] ---
 
   private upbitVolumes = new Map<string, number>();
+  private upbitOrderBooks = new Map<string, any>(); // 🔥 추가: 호가창 캐시
 
   constructor(
     private readonly configService: ConfigService,
@@ -64,12 +65,12 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
       { symbol: 'dot', upbit: 'KRW-DOT', binance: 'dotusdt' }, //
       { symbol: 'avax', upbit: 'KRW-AVAX', binance: 'avaxusdt' }, //
       // { symbol: 'hbar', upbit: 'KRW-HBAR', binance: 'hbarusdt' },
-      { symbol: 'zil', upbit: 'KRW-ZIL', binance: 'zilusdt' }, //
+      // { symbol: 'zil', upbit: 'KRW-ZIL', binance: 'zilusdt' }, //
       { symbol: 'vet', upbit: 'KRW-VET', binance: 'vetusdt' }, //
       { symbol: 'icx', upbit: 'KRW-ICX', binance: 'icxusdt' }, //
       { symbol: 'qtum', upbit: 'KRW-QTUM', binance: 'qtumusdt' }, //
       { symbol: 'neo', upbit: 'KRW-NEO', binance: 'neousdt' }, //
-      { symbol: 'btt', upbit: 'KRW-BTT', binance: 'bttcusdt' }, //
+      // { symbol: 'btt', upbit: 'KRW-BTT', binance: 'bttcusdt' }, //
       { symbol: 'mana', upbit: 'KRW-MANA', binance: 'manausdt' }, //
       { symbol: 'grt', upbit: 'KRW-GRT', binance: 'grtusdt' }, //
       { symbol: 'ardr', upbit: 'KRW-ARDR', binance: 'ardrusdt' }, //
@@ -82,6 +83,7 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
       'PriceFeedService Initialized. Starting to connect to WebSockets...',
     );
     this.connectToAllFeeds();
+    this.initializeOrderBooks();
   }
 
   onModuleDestroy() {
@@ -89,6 +91,51 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
       'PriceFeedService Destroyed. Closing all WebSocket connections...',
     );
     this.closeAllSockets();
+  }
+
+  private async initializeOrderBooks() {
+    this.logger.log('초기 오더북 정보를 로드합니다...');
+    for (const { symbol } of this._watchedSymbolsConfig) {
+      try {
+        const orderBook = await this.exchangeService.getOrderBook(
+          'upbit',
+          symbol,
+        );
+        this.upbitOrderBooks.set(symbol, orderBook);
+        this.logger.verbose(`[초기 오더북] ${symbol.toUpperCase()} 로드 완료`);
+      } catch (error) {
+        this.logger.warn(
+          `[초기 오더북] ${symbol.toUpperCase()} 로드 실패: ${error.message}`,
+        );
+      }
+      // API 호출 간격 조절
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    this.logger.log('초기 오더북 로드가 완료되었습니다.');
+  }
+
+  @Cron('*/5 * * * *')
+  async handleOrderBookUpdate() {
+    this.logger.log('주기적인 오더북 정보 업데이트를 시작합니다...');
+    for (const { symbol } of this._watchedSymbolsConfig) {
+      try {
+        const orderBook = await this.exchangeService.getOrderBook(
+          'upbit',
+          symbol,
+        );
+        this.upbitOrderBooks.set(symbol, orderBook);
+        this.logger.verbose(
+          `[오더북 캐시] ${symbol.toUpperCase()} 업데이트 완료`,
+        );
+      } catch (error) {
+        this.logger.warn(
+          `[오더북 캐시] ${symbol.toUpperCase()} 업데이트 실패: ${error.message}`,
+        );
+      }
+      // API 호출 간격 조절
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    this.logger.log('주기적인 오더북 정보 업데이트가 완료되었습니다.');
   }
 
   public getWatchedSymbols(): ReadonlyArray<WatchedSymbolConfig> {
@@ -147,6 +194,14 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
    */
   public getUpbitVolume(symbol: string): number | undefined {
     return this.upbitVolumes.get(symbol);
+  }
+
+  /**
+   * 🔥 추가: 캐시된 호가창 값을 반환합니다.
+   * @param symbol 코인 심볼
+   */
+  public getUpbitOrderBook(symbol: string): any | undefined {
+    return this.upbitOrderBooks.get(symbol);
   }
 
   private async connectToAllFeeds() {

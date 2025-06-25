@@ -220,6 +220,14 @@ export interface IExchange {
     price?: number,
   ): Promise<Order>;
 
+  /**
+   * <<<< 신규 추가: 선물 지갑 잔고 조회 >>>>
+   * 선물 지갑의 잔고를 조회합니다.
+   * @param walletType - 'SPOT' 또는 'UMFUTURE'
+   * @returns 선물 지갑 잔고 목록
+   */
+  getFuturesBalances(walletType: 'SPOT' | 'UMFUTURE'): Promise<Balance[]>;
+
   internalTransfer(
     asset: string,
     amount: number,

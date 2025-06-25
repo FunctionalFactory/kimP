@@ -23,6 +23,17 @@ export interface LowPremiumResult {
   error?: Error;
 }
 
+interface LowPremiumOpportunity {
+  symbol: string;
+  upbitPrice: number;
+  binancePrice: number;
+  expectedNetProfitKrw: number;
+  expectedNetProfitRatePercent: number;
+  expectedLossKrw: number; // 🔥 추가
+  expectedLossPercent: number; // 🔥 추가
+  rate: number;
+}
+
 @Injectable()
 export class LowPremiumProcessorService {
   private readonly logger = new Logger(LowPremiumProcessorService.name);
@@ -76,11 +87,19 @@ export class LowPremiumProcessorService {
     }
 
     const activeCycleId = this.cycleStateService.activeCycleId!;
-    const requiredProfitKrw =
-      this.cycleStateService.requiredLowPremiumNetProfitKrwForActiveCycle!;
+    // const requiredProfitKrw =
+    //   this.cycleStateService.requiredLowPremiumNetProfitKrwForActiveCycle!;
 
     const cycleInfoForLowPremium =
       await this.arbitrageRecordService.getArbitrageCycle(activeCycleId);
+    const actualHighPremiumNetProfitKrw = this.parseAndValidateNumber(
+      cycleInfoForLowPremium?.highPremiumNetProfitKrw,
+    );
+    const highPremiumSymbol = cycleInfoForLowPremium?.highPremiumSymbol;
+    // const highPremiumInitialRate = this.parseAndValidateNumber(
+    //   cycleInfoForLowPremium?.highPremiumInitialRate,
+    // );
+
     if (
       !cycleInfoForLowPremium ||
       cycleInfoForLowPremium.initialInvestmentKrw === null
@@ -124,18 +143,39 @@ export class LowPremiumProcessorService {
       };
     }
 
-    let bestLowPremiumOpportunity: {
-      symbol: string;
-      upbitPrice: number;
-      binancePrice: number;
-      expectedNetProfitKrw: number;
-      expectedNetProfitRatePercent: number;
-      rate: number;
-    } | null = null;
+    const allowedLossKrw = this.cycleStateService.getAllowedLowPremiumLoss();
+    if (allowedLossKrw === null) {
+      this.logger.error(
+        `[LPP] 허용 가능한 저프리미엄 손실 정보가 설정되지 않았습니다.`,
+      );
+      return null;
+    }
+
+    // �� 추가: 저프리미엄 탐색 시작 로그
+    this.logger.log(`[LPP_SEARCH_START] 저프리미엄 기회 탐색을 시작합니다.`);
+    this.logger.log(
+      ` - 고프리미엄 코인: ${highPremiumSymbol?.toUpperCase() || 'N/A'}`,
+    );
+    this.logger.log(
+      ` - 고프리미엄 수익: ${actualHighPremiumNetProfitKrw?.toFixed(0) || 'N/A'} KRW`,
+    );
+    this.logger.log(
+      ` - 고프리미엄 수익률: ${actualHighPremiumNetProfitKrw && lowPremiumInvestmentKRW > 0 ? ((actualHighPremiumNetProfitKrw / lowPremiumInvestmentKRW) * 100).toFixed(2) : 'N/A'}%`,
+    );
+    this.logger.log(` - 허용 가능한 손실: ${allowedLossKrw.toFixed(0)} KRW`);
+    this.logger.log(` - 투자금: ${lowPremiumInvestmentKRW.toFixed(0)} KRW`);
+    this.logger.log(` - 탐색 대상 코인 수: ${this.watchedSymbols.length}개`);
+
+    let candidateCount = 0; // 🔥 추가: 후보 코인 카운트
+    let bestLowPremiumOpportunity: LowPremiumOpportunity | null = null; // 🔥 타입 변경
 
     const currentRateForLowPremium = this.exchangeService.getUSDTtoKRW();
     const highPremiumSymbolForCurrentCycle =
       cycleInfoForLowPremium?.highPremiumSymbol;
+
+    this.logger.log(
+      `[LPP_SEARCH] 허용 가능한 저프리미엄 손실: ${allowedLossKrw.toFixed(0)} KRW`,
+    );
 
     for (const watched of this.watchedSymbols) {
       if (
@@ -150,13 +190,15 @@ export class LowPremiumProcessorService {
       );
 
       if (upbitPrice && binancePrice && lowPremiumInvestmentKRW > 0) {
+        this.logger.verbose(
+          `[LPP_ANALYSIS] ${watched.symbol.toUpperCase()} 분석 중...`,
+        );
+
         // 유동성 필터링 로직을 이 곳에 적용합니다.
         try {
-          const upbitTickerInfo = await this.exchangeService.getTickerInfo(
-            'upbit',
+          const upbitVolume24h = this.priceFeedService.getUpbitVolume(
             watched.symbol,
           );
-          const upbitVolume24h = upbitTickerInfo.quoteVolume;
 
           if (upbitVolume24h < this.MINIMUM_VOLUME_KRW) {
             this.logger.verbose(
@@ -164,6 +206,9 @@ export class LowPremiumProcessorService {
             );
             continue; // 거래량이 적으면 다음 코인으로 넘어감
           }
+          this.logger.verbose(
+            `[LP_VOLUME_OK] ${watched.symbol.toUpperCase()} 거래량 통과: ${(upbitVolume24h / 100000000).toFixed(2)}억 KRW`,
+          );
         } catch (error) {
           this.logger.warn(
             `[LP_FILTER] Failed to get ticker info for ${watched.symbol}: ${error.message}`,
@@ -173,10 +218,17 @@ export class LowPremiumProcessorService {
 
         let slippagePercent = 0;
         try {
-          const upbitOrderBook = await this.exchangeService.getOrderBook(
-            'upbit',
+          const upbitOrderBook = this.priceFeedService.getUpbitOrderBook(
             watched.symbol,
           );
+
+          if (!upbitOrderBook) {
+            this.logger.warn(
+              `[LP_FILTER] No cached order book for ${watched.symbol}. Skipping.`,
+            );
+            continue;
+          }
+
           const slippageResult = this.slippageCalculatorService.calculate(
             upbitOrderBook,
             'buy', // LP 단계는 업비트에서 '매수'로 시작
@@ -191,6 +243,9 @@ export class LowPremiumProcessorService {
             );
             continue;
           }
+          this.logger.verbose(
+            `[LP_SLIPPAGE_OK] ${watched.symbol.toUpperCase()} 슬리피지 통과: ${slippagePercent.toFixed(2)}%`,
+          );
         } catch (error) {
           this.logger.warn(
             `[LP_FILTER] Failed to check slippage for ${watched.symbol}: ${error.message}`,
@@ -221,13 +276,36 @@ export class LowPremiumProcessorService {
         //   `[LPP_EVAL] ${watched.symbol.toUpperCase()}: NetProfitKRW: ${feeResult.netProfit.toFixed(0)} vs RequiredKRW: ${requiredProfitKrw.toFixed(0)}`,
         // );
 
+        const expectedLossKrw = Math.abs(finalExpectedProfitKrw);
+        const expectedLossPercent = Math.abs(finalExpectedProfitPercent);
+
+        this.logger.verbose(
+          `[LPP_PROFIT_ANALYSIS] ${watched.symbol.toUpperCase()}:`,
+        );
+        this.logger.verbose(`  ├ 업비트 매수가: ${upbitPrice.toFixed(0)} KRW`);
+        this.logger.verbose(
+          `  ├ 바이낸스 매도가: ${binancePrice.toFixed(4)} USDT`,
+        );
+        this.logger.verbose(
+          `  ├ 수수료 후 수익률: ${feeResult.netProfitPercent.toFixed(2)}%`,
+        );
+        this.logger.verbose(`  ├ 슬리피지: ${slippagePercent.toFixed(2)}%`);
+        this.logger.verbose(
+          `  ├ 최종 예상 손실: ${expectedLossKrw.toFixed(0)} KRW (${expectedLossPercent.toFixed(2)}%)`,
+        );
+        this.logger.verbose(`  └ 허용 범위: ${allowedLossKrw.toFixed(0)} KRW`);
+
         // 최종 수정된 로직: 이 거래의 실제 손익(NetProfitKrw)이 사이클 목표를 위해
         // 감수 가능한 손익(RequiredKrw)보다 좋은지 여부만 확인합니다.
-        if (finalExpectedProfitKrw >= requiredProfitKrw) {
+        if (expectedLossKrw <= allowedLossKrw) {
+          candidateCount++; // 🔥 추가: 후보 카운트 증가
+          this.logger.log(
+            `[LPP_CANDIDATE] ${watched.symbol.toUpperCase()}: 예상 손실 ${expectedLossKrw.toFixed(0)} KRW (${expectedLossPercent.toFixed(2)}%)가 허용 범위 ${allowedLossKrw.toFixed(0)} KRW 내에 있습니다.`,
+          );
+
           if (
             !bestLowPremiumOpportunity ||
-            finalExpectedProfitKrw >
-              bestLowPremiumOpportunity.expectedNetProfitKrw
+            expectedLossKrw < bestLowPremiumOpportunity.expectedLossKrw // 🔥 손실이 적은 것을 선택
           ) {
             bestLowPremiumOpportunity = {
               symbol: watched.symbol,
@@ -235,14 +313,57 @@ export class LowPremiumProcessorService {
               binancePrice,
               expectedNetProfitKrw: finalExpectedProfitKrw,
               expectedNetProfitRatePercent: finalExpectedProfitPercent,
+              expectedLossKrw: expectedLossKrw, // 🔥 추가
+              expectedLossPercent: expectedLossPercent, // 🔥 추가
               rate: currentRateForLowPremium,
             };
+            this.logger.log(
+              `[LPP_BEST_UPDATE] ${watched.symbol.toUpperCase()}가 새로운 최적 후보로 선정되었습니다.`,
+            );
           }
+        } else {
+          this.logger.verbose(
+            `[LPP_REJECTED] ${watched.symbol.toUpperCase()}: 예상 손실 ${expectedLossKrw.toFixed(0)} KRW가 허용 범위 ${allowedLossKrw.toFixed(0)} KRW를 초과합니다.`,
+          );
         }
       }
     }
 
     if (bestLowPremiumOpportunity) {
+      // 🔥 추가: 탐색 결과 요약 로그
+      const totalExpectedProfitKrw =
+        (actualHighPremiumNetProfitKrw || 0) +
+        bestLowPremiumOpportunity.expectedNetProfitKrw;
+      const totalExpectedProfitPercent =
+        lowPremiumInvestmentKRW > 0
+          ? (totalExpectedProfitKrw / lowPremiumInvestmentKRW) * 100
+          : 0;
+      this.logger.log(`[LPP_SEARCH_SUMMARY] 저프리미엄 탐색 완료:`);
+      this.logger.log(
+        ` - 코인: ${bestLowPremiumOpportunity.symbol.toUpperCase()}`,
+      );
+      this.logger.log(
+        ` - 예상 손실: ${bestLowPremiumOpportunity.expectedLossKrw.toFixed(0)} KRW (${bestLowPremiumOpportunity.expectedLossPercent.toFixed(2)}%)`,
+      );
+      this.logger.log(
+        ` - 업비트 매수가: ${bestLowPremiumOpportunity.upbitPrice.toFixed(0)} KRW`,
+      );
+      this.logger.log(
+        ` - 바이낸스 매도가: ${bestLowPremiumOpportunity.binancePrice.toFixed(4)} USDT`,
+      );
+      this.logger.log(` - 투자금: ${lowPremiumInvestmentKRW.toFixed(0)} KRW`);
+      // 🔥 추가: 전체 사이클 예상 결과
+      this.logger.log(`[LPP_CYCLE_FORECAST] 전체 사이클 예상 결과:`);
+      this.logger.log(
+        ` - 고프리미엄 수익: ${actualHighPremiumNetProfitKrw?.toFixed(0) || 'N/A'} KRW`,
+      );
+      this.logger.log(
+        ` - 저프리미엄 손실: ${bestLowPremiumOpportunity.expectedLossKrw.toFixed(0)} KRW`,
+      );
+      this.logger.log(
+        ` - 전체 예상 수익: ${totalExpectedProfitKrw.toFixed(0)} KRW (${totalExpectedProfitPercent.toFixed(2)}%)`,
+      );
+
       if (!this.cycleStateService.startLowPremiumProcessing()) {
         this.logger.warn(
           `[LPP_FOUND_BUT_SKIPPED] 상태 변경 실패. ${bestLowPremiumOpportunity.symbol.toUpperCase()} 건너뜁니다. (Cycle ID: ${activeCycleId})`,
@@ -250,7 +371,7 @@ export class LowPremiumProcessorService {
         return null;
       }
       this.logger.log(
-        `✅ [LPP_FOUND] 최적 코인: ${bestLowPremiumOpportunity.symbol.toUpperCase()} (예상 손익: ${bestLowPremiumOpportunity.expectedNetProfitKrw.toFixed(0)} KRW, 예상 수익률: ${bestLowPremiumOpportunity.expectedNetProfitRatePercent.toFixed(3)}%). 투자금 ${lowPremiumInvestmentKRW.toFixed(0)} KRW로 저프리미엄 단계 진행.`,
+        `✅ [LPP_FOUND] 최적 코인: ${bestLowPremiumOpportunity.symbol.toUpperCase()} (예상 손실: ${bestLowPremiumOpportunity.expectedLossKrw.toFixed(0)} KRW, 예상 손실률: ${bestLowPremiumOpportunity.expectedLossPercent.toFixed(3)}%). 투자금 ${lowPremiumInvestmentKRW.toFixed(0)} KRW로 저프리미엄 단계 진행.`,
       );
 
       try {
@@ -277,6 +398,16 @@ export class LowPremiumProcessorService {
             `✅ [REAL-MODE] 저프리미엄 ${bestLowPremiumOpportunity.symbol.toUpperCase()} 모든 단계 처리 완료.`,
           );
         } else {
+          this.logger.warn(
+            `[LPP_NO_OPPORTUNITY] 허용 범위 내의 저프리미엄 기회를 찾지 못했습니다.`,
+          );
+          this.logger.warn(
+            ` - 고프리미엄 수익: ${actualHighPremiumNetProfitKrw?.toFixed(0) || 'N/A'} KRW`,
+          );
+          this.logger.warn(
+            ` - 허용 가능한 손실: ${allowedLossKrw.toFixed(0)} KRW`,
+          );
+          this.logger.warn(` - 후보 코인 수: ${candidateCount}개`);
           // ========== SIMULATION 모드 실행 블록 (기존 로직) ==========
           const randomSeconds = Math.floor(Math.random() * (60 - 60 + 1)) + 60;
           this.logger.log(

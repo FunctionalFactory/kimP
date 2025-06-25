@@ -1099,7 +1099,7 @@ export class AppController {
 
     try {
       const asset = 'USDT';
-      const amount = 50; // 테스트할 금액 (선물 지갑에 이 금액 이상이 있어야 합니다)
+      const amount = 0.00550177; // 테스트할 금액 (선물 지갑에 이 금액 이상이 있어야 합니다)
       const fromWallet = 'UMFUTURE'; // USDⓈ-M 선물 지갑
       const toWallet = 'SPOT'; // 현물 지갑
 

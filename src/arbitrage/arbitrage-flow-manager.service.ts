@@ -218,9 +218,12 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
       // 현재 구조를 유지하기 위해 이 방법을 사용합니다.
       (this.cycleStateService as any)._activeCycleId = cycle.id;
 
-      this.logger.log(
-        `✅ Cycle ${cycle.id} state recovered to AWAITING_LOW_PREMIUM. Required profit: ${requiredProfit.toFixed(0)} KRW.`,
-      );
+      const allowedLossKrw = this.cycleStateService.getAllowedLowPremiumLoss();
+      if (allowedLossKrw !== null) {
+        this.logger.log(
+          `[FM_ProcessLowPremium] 허용 가능한 저프리미엄 손실: ${allowedLossKrw.toFixed(0)} KRW`,
+        );
+      }
     } else {
       this.logger.error(
         `Cannot automatically recover cycle ${cycle.id} from status ${cycle.status}. Marking as FAILED.`,
@@ -399,33 +402,6 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
                 `[FINAL_CHECK_ERROR] 최종 검증 중 예외 발생: ${error.message}`,
               );
               this.cycleStateService.resetCycleState();
-            }
-
-            const hpResult =
-              await this.highPremiumProcessorService.processHighPremiumOpportunity(
-                finalOpportunity,
-              );
-
-            if (
-              hpResult.success &&
-              hpResult.nextStep === 'awaitLowPremium' &&
-              hpResult.cycleId
-            ) {
-              this.logger.log(
-                `High premium processing successful (Cycle: ${hpResult.cycleId}). Awaiting low premium processing.`,
-              );
-            } else if (!hpResult.success) {
-              // ⭐️ 2. 오류 로그 수정
-              this.logger.error(
-                `High premium processing failed. Triggering completion if cycleId exists.`,
-              );
-              if (hpResult.cycleId) {
-                await this.cycleCompletionService.completeCycle(
-                  hpResult.cycleId,
-                );
-              } else {
-                this.cycleStateService.resetCycleState();
-              }
             }
           }, this.DECISION_WINDOW_MS);
         } else if (

@@ -259,6 +259,14 @@ export class HighPremiumProcessorService {
       const requiredLowPremiumProfit =
         overallTargetProfitKrw - actualHighPremiumNetProfitKrw;
 
+      const allowedLossKrw = Math.abs(requiredLowPremiumProfit);
+
+      this.logger.log(
+        `[HPP] 고프리미엄 수익: ${actualHighPremiumNetProfitKrw.toFixed(0)} KRW, 허용 가능한 저프리미엄 손실: ${allowedLossKrw.toFixed(0)} KRW`,
+      );
+
+      this.cycleStateService.setAllowedLowPremiumLoss(allowedLossKrw);
+
       await this.arbitrageRecordService.updateArbitrageCycle(
         this.cycleStateService.activeCycleId!,
         { status: 'AWAITING_LP' },

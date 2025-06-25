@@ -27,6 +27,7 @@ export class ArbitrageCycleStateService {
   private _latestPortfolioLogAtCycleStart: PortfolioLog | null = null;
   private _bestOpportunityCandidate: HighPremiumConditionData | null = null;
   private _decisionTimer: NodeJS.Timeout | null = null;
+  private allowedLowPremiumLossKrw: number | null = null;
 
   // [추가] 사이클 횟수 제어 변수
   private _completedCycleCount = 0;
@@ -59,6 +60,17 @@ export class ArbitrageCycleStateService {
   }
   get latestPortfolioLogAtCycleStart(): PortfolioLog | null {
     return this._latestPortfolioLogAtCycleStart;
+  }
+
+  public setAllowedLowPremiumLoss(lossKrw: number): void {
+    this.allowedLowPremiumLossKrw = lossKrw;
+    this.logger.log(
+      `[CYCLE_STATE] 허용 가능한 저프리미엄 손실 설정: ${lossKrw.toFixed(0)} KRW`,
+    );
+  }
+
+  public getAllowedLowPremiumLoss(): number | null {
+    return this.allowedLowPremiumLossKrw;
   }
 
   public incrementCompletedCycleCount(): void {

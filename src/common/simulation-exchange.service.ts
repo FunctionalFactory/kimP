@@ -317,6 +317,27 @@ export class SimulationExchangeService implements IExchange, OnModuleInit {
     return mockOrder;
   }
 
+  async getFuturesBalances(
+    walletType: 'SPOT' | 'UMFUTURE',
+  ): Promise<Balance[]> {
+    this.logger.log(`[SIMULATION] Getting ${walletType} balances.`);
+
+    if (walletType === 'UMFUTURE') {
+      // 선물 지갑 시뮬레이션 - USDT 잔고만 반환
+      return [
+        {
+          currency: 'USDT',
+          balance: 10000, // 시뮬레이션용 충분한 USDT 잔고
+          locked: 0,
+          available: 10000,
+        },
+      ];
+    }
+
+    // 현물 지갑 요청 시 기존 getBalances 메서드 사용
+    return this.getBalances();
+  }
+
   async internalTransfer(
     asset: string,
     amount: number,

@@ -761,4 +761,60 @@ export class BinanceService implements IExchange {
       throw new Error(`Binance API Error: ${errorMessage}`);
     }
   }
+
+  async getFuturesBalances(
+    walletType: 'SPOT' | 'UMFUTURE',
+  ): Promise<Balance[]> {
+    const timestamp = Date.now();
+    const queryString = `timestamp=${timestamp}`;
+    const signature = this._generateSignature(queryString);
+
+    try {
+      let url: string;
+      if (walletType === 'UMFUTURE') {
+        // 선물 지갑 잔고 조회
+        url = `${this.futuresServerUrl}/fapi/v2/account?${queryString}&signature=${signature}`;
+      } else {
+        // 현물 지갑 잔고 조회 (기존 getBalances와 동일)
+        url = `${this.serverUrl}/api/v3/account?${queryString}&signature=${signature}`;
+      }
+
+      const response = await axios.get(url, {
+        headers: { 'X-MBX-APIKEY': this.apiKey },
+      });
+
+      if (walletType === 'UMFUTURE') {
+        // 선물 지갑 응답 처리
+        const balances = response.data.assets || [];
+        return balances
+          .filter((asset: any) => parseFloat(asset.walletBalance) > 0)
+          .map((asset: any) => ({
+            currency: asset.asset,
+            balance: parseFloat(asset.walletBalance),
+            locked: parseFloat(asset.maintMargin),
+            available: parseFloat(asset.availableBalance),
+          }));
+      } else {
+        // 현물 지갑 응답 처리 (기존과 동일)
+        const balances = response.data.balances || [];
+        return balances
+          .filter(
+            (balance: any) =>
+              parseFloat(balance.free) > 0 || parseFloat(balance.locked) > 0,
+          )
+          .map((balance: any) => ({
+            currency: balance.asset,
+            balance: parseFloat(balance.free) + parseFloat(balance.locked),
+            locked: parseFloat(balance.locked),
+            available: parseFloat(balance.free),
+          }));
+      }
+    } catch (error) {
+      const errorMessage = error.response?.data?.msg || error.message;
+      this.logger.error(
+        `[FUTURES_BALANCE_FAIL] 선물 잔고 조회 실패: ${errorMessage}`,
+      );
+      throw new Error(`Binance API Error: ${errorMessage}`);
+    }
+  }
 }

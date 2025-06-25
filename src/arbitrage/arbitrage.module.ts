@@ -30,6 +30,7 @@ import { ArbitrageCycle } from '../db/entities/arbitrage-cycle.entity';
 import { StrategyHighService } from 'src/common/strategy-high.service';
 import { DepositMonitorService } from './deposit-monitor.service';
 import { SlippageCalculatorService } from 'src/common/slippage-calculator.service';
+import { WithdrawalConstraintService } from 'src/common/withdrawal-constraint.service';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { SlippageCalculatorService } from 'src/common/slippage-calculator.servic
     ExchangeService,
     FeeCalculatorService,
     SlippageCalculatorService,
+    WithdrawalConstraintService,
   ],
   exports: [
     ArbitrageFlowManagerService,
@@ -67,6 +69,7 @@ import { SlippageCalculatorService } from 'src/common/slippage-calculator.servic
     CycleCompletionService,
     ExchangeService,
     DepositMonitorService,
+    WithdrawalConstraintService,
   ],
 })
 export class ArbitrageModule {}
