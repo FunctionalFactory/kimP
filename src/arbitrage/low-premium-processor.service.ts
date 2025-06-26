@@ -190,9 +190,9 @@ export class LowPremiumProcessorService {
       );
 
       if (upbitPrice && binancePrice && lowPremiumInvestmentKRW > 0) {
-        this.logger.verbose(
-          `[LPP_ANALYSIS] ${watched.symbol.toUpperCase()} 분석 중...`,
-        );
+        // this.logger.verbose(
+        //   `[LPP_ANALYSIS] ${watched.symbol.toUpperCase()} 분석 중...`,
+        // );
 
         // 유동성 필터링 로직을 이 곳에 적용합니다.
         try {
@@ -201,14 +201,14 @@ export class LowPremiumProcessorService {
           );
 
           if (upbitVolume24h < this.MINIMUM_VOLUME_KRW) {
-            this.logger.verbose(
-              `[LP_FILTERED] Skipped ${watched.symbol} due to low trading volume: ${(upbitVolume24h / 100000000).toFixed(2)}억 KRW`,
-            );
+            // this.logger.verbose(
+            //   `[LP_FILTERED] Skipped ${watched.symbol} due to low trading volume: ${(upbitVolume24h / 100000000).toFixed(2)}억 KRW`,
+            // );
             continue; // 거래량이 적으면 다음 코인으로 넘어감
           }
-          this.logger.verbose(
-            `[LP_VOLUME_OK] ${watched.symbol.toUpperCase()} 거래량 통과: ${(upbitVolume24h / 100000000).toFixed(2)}억 KRW`,
-          );
+          // this.logger.verbose(
+          //   `[LP_VOLUME_OK] ${watched.symbol.toUpperCase()} 거래량 통과: ${(upbitVolume24h / 100000000).toFixed(2)}억 KRW`,
+          // );
         } catch (error) {
           this.logger.warn(
             `[LP_FILTER] Failed to get ticker info for ${watched.symbol}: ${error.message}`,

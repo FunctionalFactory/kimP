@@ -71,7 +71,7 @@ export class SpreadCalculatorService {
     });
 
     // 최소 진입 프리미엄 기준 (예: 1.5%)을 여기에 추가할 수 있습니다.
-    const MINIMUM_ENTRY_PREMIUM = 0.5;
+    const MINIMUM_ENTRY_PREMIUM = 0.7;
     if (feeResult.netProfitPercent < MINIMUM_ENTRY_PREMIUM) {
       const initialInvestmentKRW = investmentUSDT * rate;
       const rawProfitKRW = initialInvestmentKRW * (rawPremiumPercent / 100);

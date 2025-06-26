@@ -177,25 +177,25 @@ export class FeeCalculatorService {
         rate,
       );
 
-      this.logger.log(
-        `[수수료계산_저프] --- ${symbol.toUpperCase()} 저프리미엄 수수료 상세 내역 ---`,
-      );
-      this.logger.log(
-        `  - 업비트 매수 수수료 (KRW): ${fees.upbitBuyFeeKrw?.toFixed(2)}`,
-      );
-      this.logger.log(
-        `  - 바이낸스 매도 수수료 (KRW): ${fees.binanceSpotSellFeeKrw?.toFixed(2)}`,
-      );
-      this.logger.log(
-        `  - 바이낸스로 전송 수수료 (KRW): ${fees.transferCoinToBinanceFeeKrw?.toFixed(2)}`,
-      );
-      this.logger.log(
-        `  - 선물 진입 수수료 (KRW): ${fees.binanceFuturesEntryFeeKrw?.toFixed(2)}`,
-      );
-      this.logger.log(
-        `  - 선물 청산 수수료 (KRW): ${fees.binanceFuturesExitFeeKrw?.toFixed(2)}`,
-      );
-      this.logger.log(`  ----------------------------------------------------`);
+      // this.logger.log(
+      //   `[수수료계산_저프] --- ${symbol.toUpperCase()} 저프리미엄 수수료 상세 내역 ---`,
+      // );
+      // this.logger.log(
+      //   `  - 업비트 매수 수수료 (KRW): ${fees.upbitBuyFeeKrw?.toFixed(2)}`,
+      // );
+      // this.logger.log(
+      //   `  - 바이낸스 매도 수수료 (KRW): ${fees.binanceSpotSellFeeKrw?.toFixed(2)}`,
+      // );
+      // this.logger.log(
+      //   `  - 바이낸스로 전송 수수료 (KRW): ${fees.transferCoinToBinanceFeeKrw?.toFixed(2)}`,
+      // );
+      // this.logger.log(
+      //   `  - 선물 진입 수수료 (KRW): ${fees.binanceFuturesEntryFeeKrw?.toFixed(2)}`,
+      // );
+      // this.logger.log(
+      //   `  - 선물 청산 수수료 (KRW): ${fees.binanceFuturesExitFeeKrw?.toFixed(2)}`,
+      // );
+      // this.logger.log(`  ----------------------------------------------------`);
     } else {
       throw new Error('Invalid trade direction specified for fee calculation.');
     }
