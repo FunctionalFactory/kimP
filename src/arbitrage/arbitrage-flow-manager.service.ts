@@ -270,7 +270,9 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
       const totalCapitalKRW =
         latestPortfolio?.total_balance_krw ||
         this.configService.get<number>('INITIAL_CAPITAL_KRW');
-      const investmentKRW = Number(totalCapitalKRW) * 0.1;
+      const investmentKRW =
+        Number(totalCapitalKRW) *
+        (this.configService.get<number>('INVESTMENT_PERCENTAGE') / 100 || 0.1);
       const rate = this.exchangeService.getUSDTtoKRW();
       if (rate === 0) {
         this.logger.warn('Rate is 0, skipping opportunity check.');

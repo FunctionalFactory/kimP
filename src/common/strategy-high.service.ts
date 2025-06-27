@@ -599,15 +599,63 @@ export class StrategyHighService {
     );
     const market = `KRW-${symbol.toUpperCase()}`;
 
-    let lastOrderPrice = 0; // �� 추가: 마지막 주문 가격 추적
-    let currentOrderId: string | null = null; // 현재 활성 주문 ID
-    let consecutiveNoBalanceCount = 0; // �� 추가: 연속 잔고 없음 카운트
+    let lastOrderPrice = 0;
+    let currentOrderId: string | null = null;
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
       try {
-        // 1. 5초마다 현재가 조회
-        this.logger.verbose(`[AGGRESSIVE_SELL] 현재가 조회를 시도합니다...`);
+        // --- 1. 실제 잔고 확인 ---
+        const upbitBalances = await this.exchangeService.getBalances('upbit');
+        const actualBalance =
+          upbitBalances.find((b) => b.currency === symbol.toUpperCase())
+            ?.available || 0;
+
+        this.logger.log(
+          `[AGGRESSIVE_SELL] 실제 ${symbol} 잔고: ${actualBalance}, 초기 매도 요청 수량: ${amountToSell}`,
+        );
+
+        // --- 2. 매도 완료 조건 확인 (핵심 수정) ---
+        if (actualBalance <= 0) {
+          this.logger.log(
+            `[AGGRESSIVE_SELL] 잔고가 0이므로, 매도가 성공적으로 완료된 것으로 간주합니다.`,
+          );
+          // 마지막 주문 ID가 있다면, 해당 주문의 최종 상태를 조회하여 반환 시도
+          if (currentOrderId) {
+            try {
+              const finalOrder = await this.exchangeService.getOrder(
+                'upbit',
+                currentOrderId,
+                symbol,
+              );
+              // 최종 주문 상태가 'filled'이면 성공적으로 반환
+              if (finalOrder.status === 'filled') {
+                this.logger.log(
+                  `[AGGRESSIVE_SELL] 최종 확인된 체결 주문(${finalOrder.id}) 정보를 반환하고 매도를 종료합니다.`,
+                );
+                return finalOrder;
+              }
+            } catch (statusError) {
+              // 조회가 실패하더라도, 잔고가 0이므로 더 이상 진행하는 것은 무의미함
+              this.logger.error(
+                `[AGGRESSIVE_SELL] 최종 주문(${currentOrderId}) 상태 확인에 실패했으나, 잔고가 0이므로 매도를 성공으로 간주하고 종료합니다. 오류: ${statusError.message}`,
+              );
+              // 이 경우, 더 이상 진행하면 안되므로 명시적인 에러를 발생시켜 사이클을 안전하게 중단
+              throw new Error(
+                `Selling completed (balance is zero), but failed to get final order status for ${currentOrderId}.`,
+              );
+            }
+          }
+          // 마지막 주문 ID가 없는데 잔고가 0인 경우. 이는 로직상 발생하기 어렵지만 안전장치로 추가
+          this.logger.warn(
+            `[AGGRESSIVE_SELL] 마지막 주문 ID가 없으나 잔고가 0입니다. 매도 프로세스를 안전하게 중단합니다.`,
+          );
+          throw new Error(
+            'Selling seems completed (balance is zero), but no last order ID was tracked.',
+          );
+        }
+
+        // --- 3. 현재가 조회 및 주문 취소/재주문 로직 (기존과 유사) ---
         const tickerResponse = await axios.get(
           `https://api.upbit.com/v1/ticker?markets=${market}`,
         );
@@ -621,10 +669,9 @@ export class StrategyHighService {
           continue;
         }
 
-        // �� 추가: 현재가와 마지막 주문 가격이 같으면 재주문 건너뛰기
         if (currentOrderId && lastOrderPrice !== currentPrice) {
           this.logger.log(
-            `[AGGRESSIVE_SELL] 가격 변동 감지: ${lastOrderPrice} → ${currentPrice}. 기존 주문 취소 후 재주문합니다.`,
+            `[AGGRESSIVE_SELL] 가격 변동 감지: ${lastOrderPrice} → ${currentPrice}. 기존 주문(${currentOrderId}) 취소 후 재주문합니다.`,
           );
           try {
             await this.exchangeService.cancelOrder(
@@ -636,103 +683,17 @@ export class StrategyHighService {
             this.logger.warn(
               `[AGGRESSIVE_SELL] 주문 취소 실패 (이미 체결되었을 수 있음): ${cancelError.message}`,
             );
-            // 주문이 이미 체결되었을 수 있으므로 확인
-            try {
-              const orderStatus = await this.exchangeService.getOrder(
-                'upbit',
-                currentOrderId,
-                symbol,
-              );
-              if (orderStatus.status === 'filled') {
-                this.logger.log(
-                  `[AGGRESSIVE_SELL] 기존 주문이 이미 체결되었습니다! Order ID: ${orderStatus.id}, 체결 수량: ${orderStatus.filledAmount}`,
-                );
-                return orderStatus;
-              }
-            } catch (statusError) {
-              this.logger.warn(
-                `[AGGRESSIVE_SELL] 주문 상태 확인 실패: ${statusError.message}`,
-              );
-            }
           }
           currentOrderId = null; // 주문 ID 리셋
         }
 
-        //매도 시도 전 실제 잔고 재확인
-        const upbitBalances = await this.exchangeService.getBalances('upbit');
-        const actualBalance =
-          upbitBalances.find((b) => b.currency === symbol.toUpperCase())
-            ?.available || 0;
-
-        this.logger.log(
-          `[AGGRESSIVE_SELL] 실제 ${symbol} 잔고: ${actualBalance}, 매도 시도 수량: ${amountToSell}`,
-        );
-
-        // �� 수정: 잔고가 음수이면 이미 주문이 들어간 것으로 간주
-        if (actualBalance < 0) {
-          consecutiveNoBalanceCount++;
-
-          this.logger.log(
-            `[AGGRESSIVE_SELL] 잔고가 음수(${actualBalance})입니다. 이미 매도 주문이 들어간 것으로 간주하고 주문 상태만 확인합니다.`,
-          );
-
-          if (consecutiveNoBalanceCount >= 3) {
-            this.logger.log(
-              `[AGGRESSIVE_SELL] ${symbol} 잔고가 3회 연속으로 없습니다. 매도가 완료된 것으로 간주합니다.`,
-            );
-
-            // 기존 주문이 있으면 상태 확인
-            if (currentOrderId) {
-              try {
-                const orderStatus = await this.exchangeService.getOrder(
-                  'upbit',
-                  currentOrderId,
-                  symbol,
-                );
-
-                if (orderStatus.status === 'filled') {
-                  this.logger.log(
-                    `[AGGRESSIVE_SELL] 매도 성공! Order ID: ${orderStatus.id}, 체결 수량: ${orderStatus.filledAmount}`,
-                  );
-                  return orderStatus;
-                }
-              } catch (orderError) {
-                this.logger.warn(
-                  `[AGGRESSIVE_SELL] 주문 상태 확인 실패: ${orderError.message}`,
-                );
-                currentOrderId = null; // 주문 ID 리셋하여 재주문 유도
-              }
-            }
-          }
-
-          // 잔고가 음수일 때는 10초 후 재확인
-          await delay(10000);
-          continue;
-        }
-        consecutiveNoBalanceCount = 0;
-
-        // 수정: 실제 잔고가 매도 시도 수량보다 적으면 실제 잔고로 조정
-        const adjustedAmountToSell = Math.min(actualBalance, amountToSell);
-
-        if (adjustedAmountToSell <= 0) {
-          this.logger.warn(
-            `[AGGRESSIVE_SELL] ${symbol} 잔고가 없습니다. 매도를 중단합니다.`,
-          );
-          throw new Error(`No ${symbol} balance available for selling.`);
-        }
-
-        if (adjustedAmountToSell < amountToSell) {
-          this.logger.warn(
-            `[AGGRESSIVE_SELL] 실제 잔고(${actualBalance})가 요청 수량(${amountToSell})보다 적습니다. 조정된 수량(${adjustedAmountToSell})으로 매도합니다.`,
-          );
-        }
-
-        // 4. 새로운 주문 생성 (기존 주문이 없거나 가격이 변동된 경우)
+        // --- 4. 신규 주문 생성 ---
         if (!currentOrderId) {
-          this.logger.log(
-            `[AGGRESSIVE_SELL] 현재가: ${currentPrice} KRW. 해당 가격으로 지정가 매도를 시도합니다.`,
-          );
+          const adjustedAmountToSell = Math.min(actualBalance, amountToSell);
 
+          this.logger.log(
+            `[AGGRESSIVE_SELL] 현재가: ${currentPrice} KRW. 해당 가격으로 지정가 매도를 시도합니다. 수량: ${adjustedAmountToSell}`,
+          );
           const sellOrder = await this.exchangeService.createOrder(
             'upbit',
             symbol,
@@ -741,16 +702,14 @@ export class StrategyHighService {
             adjustedAmountToSell,
             currentPrice,
           );
-
           currentOrderId = sellOrder.id;
           lastOrderPrice = currentPrice;
-
           this.logger.log(
             `[AGGRESSIVE_SELL] 매도 주문 생성 완료. Order ID: ${currentOrderId}`,
           );
         }
 
-        // 5. 주문 상태 확인
+        // --- 5. 주문 상태 확인 ---
         if (currentOrderId) {
           try {
             const orderStatus = await this.exchangeService.getOrder(
@@ -758,41 +717,23 @@ export class StrategyHighService {
               currentOrderId,
               symbol,
             );
-
             if (orderStatus.status === 'filled') {
               this.logger.log(
                 `[AGGRESSIVE_SELL] 매도 성공! Order ID: ${orderStatus.id}, 체결 수량: ${orderStatus.filledAmount}`,
               );
-              return orderStatus;
+              return orderStatus; // 체결 확인 후 즉시 함수 종료
             }
           } catch (orderError) {
             this.logger.warn(
               `[AGGRESSIVE_SELL] 주문 상태 확인 실패: ${orderError.message}`,
             );
-            currentOrderId = null; // 주문 ID 리셋하여 재주문 유도
+            currentOrderId = null; // 다음 루프에서 재주문을 유도하기 위해 ID 리셋
           }
         }
       } catch (error) {
-        const errorMessage = error.message.toLowerCase();
-        // 재시도가 무의미한 특정 에러 키워드들
-        const fatalErrors = [
-          'insufficient funds',
-          'invalid access key',
-          'minimum total',
-          'no balance available', // �� 추가: 잔고 부족 에러
-          'selling completed', // �� 추가: 매도 완료 에러
-        ];
-
-        if (fatalErrors.some((keyword) => errorMessage.includes(keyword))) {
-          this.logger.error(
-            `[AGGRESSIVE_SELL] 치명적 오류 발생, 매도를 중단합니다: ${error.message}`,
-          );
-          // 여기서 에러를 다시 던져서 handleHighPremiumFlow의 메인 catch 블록으로 넘김
-          throw error;
-        }
-
+        // 이 catch 블록은 이제 API 통신 오류 등 예상치 못한 오류만 처리하게 됨
         this.logger.error(
-          `[AGGRESSIVE_SELL] 매도 시도 중 오류 발생: ${error.message}. 5초 후 재시도합니다.`,
+          `[AGGRESSIVE_SELL] 매도 시도 중 예측하지 못한 오류 발생: ${error.message}. 5초 후 재시도합니다.`,
         );
       }
       await delay(5000); // 다음 시도까지 5초 대기

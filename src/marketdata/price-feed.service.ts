@@ -74,6 +74,18 @@ export class PriceFeedService implements OnModuleInit, OnModuleDestroy {
       { symbol: 'mana', upbit: 'KRW-MANA', binance: 'manausdt' }, //
       { symbol: 'grt', upbit: 'KRW-GRT', binance: 'grtusdt' }, //
       { symbol: 'ardr', upbit: 'KRW-ARDR', binance: 'ardrusdt' }, //
+      { symbol: 'newt', upbit: 'KRW-NEWT', binance: 'newtusdt' }, //
+      { symbol: 'sahara', upbit: 'KRW-SAHARA', binance: 'saharausdt' }, //
+      { symbol: 'move', upbit: 'KRW-MOVE', binance: 'moveusdt' }, //
+      { symbol: 'trump', upbit: 'KRW-TRUMP', binance: 'trumpusdt' }, //
+      { symbol: 'layer', upbit: 'KRW-LAYER', binance: 'layerusdt' }, //
+      { symbol: 'pepe', upbit: 'KRW-PEPE', binance: 'pepeusdt' },
+      { symbol: 'ondo', upbit: 'KRW-ONDO', binance: 'ondousdt' },
+      { symbol: 'shib', upbit: 'KRW-SHIB', binance: 'shibusdt' },
+      { symbol: 'sui', upbit: 'KRW-SUI', binance: 'suiusdt' },
+      { symbol: 'uni', upbit: 'KRW-UNI', binance: 'uniusdt' },
+      { symbol: 'sei', upbit: 'KRW-SEI', binance: 'seiusdt' },
+      { symbol: 'apt', upbit: 'KRW-APT', binance: 'aptusdt' },
     ];
     this.totalRequiredConnections = this._watchedSymbolsConfig.length * 2;
   }

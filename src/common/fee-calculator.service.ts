@@ -54,6 +54,9 @@ export class FeeCalculatorService {
     lsk: 4.42,
     ardr: 2,
     iq: 50,
+    newt: 3.86,
+    sahara: 17,
+    move: 7.81,
   };
   private readonly UPBIT_TRANSFER_FEE_TABLE: Record<string, number> = {
     xrp: 0.4,
@@ -79,6 +82,9 @@ export class FeeCalculatorService {
     ardr: 2,
     a: 0.01,
     iq: 0,
+    newt: 3,
+    sahara: 8,
+    move: 5,
   };
 
   private _applySlippage(

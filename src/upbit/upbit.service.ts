@@ -41,18 +41,29 @@ export class UpbitService implements IExchange {
   /**
    * 업비트의 호가 단위 규칙에 맞게 가격을 조정하는 헬퍼 함수
    * @param price 조정할 가격
-   * @returns 조정된 가격
+   * @returns 조정되고 포맷팅된 가격 문자열
    */
-  private _adjustPriceToUnit(price: number): number {
-    if (price >= 2000000) return Math.round(price / 1000) * 1000;
-    if (price >= 1000000) return Math.round(price / 500) * 500;
-    if (price >= 100000) return Math.round(price / 50) * 50;
-    if (price >= 10000) return Math.round(price / 10) * 10;
-    if (price >= 1000) return Math.round(price / 1) * 1;
-    if (price >= 100) return Math.round(price / 0.1) * 0.1;
-    if (price >= 10) return Math.round(price / 0.01) * 0.01;
-    if (price >= 1) return Math.round(price / 0.001) * 0.001;
-    return Math.round(price / 0.0001) * 0.0001;
+  private _adjustPriceToUnit(price: number): string {
+    // 반환 타입을 string으로 유지
+    if (price >= 2000000) return (Math.round(price / 1000) * 1000).toFixed(0);
+    if (price >= 1000000) return (Math.round(price / 500) * 500).toFixed(0);
+    if (price >= 100000) return (Math.round(price / 50) * 50).toFixed(0);
+    if (price >= 10000) return (Math.round(price / 10) * 10).toFixed(0);
+
+    // 1,000원 이상은 1원 단위로 반올림
+    if (price >= 1000) return Math.round(price).toFixed(0);
+
+    // 100원 이상 1,000원 미만도 1원 단위로 반올림 (이 부분이 핵심 수정 사항)
+    if (price >= 100) return Math.round(price).toFixed(0);
+
+    // 10원 이상 100원 미만은 소수점 둘째 자리까지
+    if (price >= 10) return (Math.round(price / 0.01) * 0.01).toFixed(2);
+
+    // 1원 이상 10원 미만은 소수점 셋째 자리까지
+    if (price >= 1) return (Math.round(price / 0.001) * 0.001).toFixed(3);
+
+    // 1원 미만은 소수점 넷째 자리까지
+    return (Math.round(price / 0.0001) * 0.0001).toFixed(4);
   }
 
   /**
@@ -69,6 +80,19 @@ export class UpbitService implements IExchange {
       XCORE: 'XRP',
       MANA: 'ETH',
       GRT: 'ETH',
+      NEWT: 'ETH',
+      W: 'ETH',
+      APT: 'APT',
+      ONDO: 'ETH',
+      SHIB: 'ETH',
+      SUI: 'SUI',
+      UNI: 'ETH',
+      SEI: 'SEI',
+      PEPE: 'ETH',
+      LAYER: 'ETH',
+      TRUMP: 'ETH',
+      SAHARA: 'ETH',
+      MOVE: 'ETH',
       // 'USDT': 'TRX',
     };
     return networkMap[upperSymbol] || upperSymbol;
@@ -173,13 +197,13 @@ export class UpbitService implements IExchange {
       ord_type: type,
     };
     if (type === 'limit') {
-      const adjustedPrice = this._adjustPriceToUnit(price);
+      const adjustedPriceString = this._adjustPriceToUnit(price);
       this.logger.log(
-        `Adjusted Upbit order price: ${price} -> ${adjustedPrice}`,
+        `Adjusted Upbit order price: ${price} -> ${adjustedPriceString}`,
       );
 
       params.volume = String(amount);
-      params.price = String(adjustedPrice);
+      params.price = adjustedPriceString;
     } else if (type === 'market' && side === 'buy') {
       params.ord_type = 'price';
       params.price = String(price); // 시장가 매수 시 주문 총액
