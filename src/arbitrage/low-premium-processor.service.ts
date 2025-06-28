@@ -120,9 +120,26 @@ export class LowPremiumProcessorService {
         error: new Error('Initial investment info not found for low premium.'),
       };
     }
-    const lowPremiumInvestmentKRW = this.parseAndValidateNumber(
-      cycleInfoForLowPremium.initialInvestmentKrw,
-    )!;
+
+    let lowPremiumInvestmentKRW =
+      this.cycleStateService.getLowPremiumInvestment();
+
+    if (lowPremiumInvestmentKRW === null) {
+      // 사이클 상태에 없으면 기존 방식으로 계산
+      const baseInvestmentKRW = this.parseAndValidateNumber(
+        cycleInfoForLowPremium.initialInvestmentKrw,
+      )!;
+      const highPremiumProfitKRW = actualHighPremiumNetProfitKrw || 0;
+      lowPremiumInvestmentKRW = baseInvestmentKRW + highPremiumProfitKRW;
+
+      this.logger.log(
+        `[LPP_INVESTMENT] 사이클 상태에서 투자금을 찾을 수 없어 계산: ${baseInvestmentKRW.toFixed(0)} KRW (원금) + ${highPremiumProfitKRW.toFixed(0)} KRW (고프리미엄 수익) = ${lowPremiumInvestmentKRW.toFixed(0)} KRW`,
+      );
+    } else {
+      this.logger.log(
+        `[LPP_INVESTMENT] 사이클 상태에서 투자금 가져옴: ${lowPremiumInvestmentKRW.toFixed(0)} KRW`,
+      );
+    }
 
     const searchStartTime = this.cycleStateService.lowPremiumSearchStartTime;
     if (!searchStartTime) {

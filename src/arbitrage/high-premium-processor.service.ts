@@ -253,6 +253,9 @@ export class HighPremiumProcessorService {
         `📈 [HIGH_PREMIUM_RESULT] ${data.symbol.toUpperCase()} 실제 순이익: ${actualHighPremiumNetProfitKrw.toFixed(0)} KRW`,
       );
 
+      const lowPremiumInvestmentKRW =
+        highPremiumInvestmentKRW + actualHighPremiumNetProfitKrw;
+
       const overallTargetProfitKrw =
         (currentTotalKRWCapital * this.TARGET_OVERALL_CYCLE_PROFIT_PERCENT) /
         100;
@@ -266,6 +269,8 @@ export class HighPremiumProcessorService {
       );
 
       this.cycleStateService.setAllowedLowPremiumLoss(allowedLossKrw);
+
+      this.cycleStateService.setLowPremiumInvestment(lowPremiumInvestmentKRW);
 
       await this.arbitrageRecordService.updateArbitrageCycle(
         this.cycleStateService.activeCycleId!,

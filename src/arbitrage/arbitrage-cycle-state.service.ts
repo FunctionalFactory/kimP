@@ -28,6 +28,7 @@ export class ArbitrageCycleStateService {
   private _bestOpportunityCandidate: HighPremiumConditionData | null = null;
   private _decisionTimer: NodeJS.Timeout | null = null;
   private allowedLowPremiumLossKrw: number | null = null;
+  private _lowPremiumInvestmentKRW: number | null = null;
 
   // [추가] 사이클 횟수 제어 변수
   private _completedCycleCount = 0;
@@ -60,6 +61,18 @@ export class ArbitrageCycleStateService {
   }
   get latestPortfolioLogAtCycleStart(): PortfolioLog | null {
     return this._latestPortfolioLogAtCycleStart;
+  }
+
+  // 🔥 추가: 저프리미엄 투자금 getter/setter
+  public setLowPremiumInvestment(investmentKRW: number): void {
+    this._lowPremiumInvestmentKRW = investmentKRW;
+    this.logger.log(
+      `[CYCLE_STATE] 저프리미엄 투자금 설정: ${investmentKRW.toFixed(0)} KRW`,
+    );
+  }
+
+  public getLowPremiumInvestment(): number | null {
+    return this._lowPremiumInvestmentKRW;
   }
 
   public setAllowedLowPremiumLoss(lossKrw: number): void {
@@ -200,5 +213,7 @@ export class ArbitrageCycleStateService {
     this._highPremiumInitialRateForActiveCycle = null;
     this._lowPremiumSearchStartTime = null;
     this._latestPortfolioLogAtCycleStart = null;
+    this._lowPremiumInvestmentKRW = null;
+    this.allowedLowPremiumLossKrw = null;
   }
 }

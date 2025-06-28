@@ -77,7 +77,6 @@ export class UpbitService implements IExchange {
       BTT: 'TRX',
       XRP: 'XRP',
       BTC: 'Bitcoin',
-      XCORE: 'XRP',
       MANA: 'ETH',
       GRT: 'ETH',
       NEWT: 'ETH',
