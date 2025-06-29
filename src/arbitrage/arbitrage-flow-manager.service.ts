@@ -263,16 +263,33 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
       if (upbitPrice === undefined || binancePrice === undefined) return;
 
       // --- 1. 잠재적 투자금액 결정 ---
-      // 실제 거래에서는 더 정교한 방법으로 투자금을 결정해야 합니다.
-      // 여기서는 최신 포트폴리오의 10%를 투자한다고 가정합니다.
-      const latestPortfolio =
-        await this.portfolioLogService.getLatestPortfolio();
-      const totalCapitalKRW =
-        latestPortfolio?.total_balance_krw ||
-        this.configService.get<number>('INITIAL_CAPITAL_KRW');
-      const investmentKRW =
-        Number(totalCapitalKRW) *
-        (this.configService.get<number>('INVESTMENT_PERCENTAGE') / 100 || 0.1);
+      const investmentStrategy =
+        this.configService.get<string>('INVESTMENT_STRATEGY') || 'FIXED_AMOUNT';
+      let investmentKRW: number;
+
+      if (investmentStrategy === 'FIXED_AMOUNT') {
+        // 세션당 고정 금액 사용
+        investmentKRW =
+          this.configService.get<number>('SESSION_INVESTMENT_AMOUNT_KRW') ||
+          100000;
+        this.logger.debug(
+          `[FLOW_MANAGER] 세션당 고정 투자금 사용: ${investmentKRW.toLocaleString()} KRW`,
+        );
+      } else {
+        // 기존 비율 기반 투자
+        const latestPortfolio =
+          await this.portfolioLogService.getLatestPortfolio();
+        const totalCapitalKRW =
+          latestPortfolio?.total_balance_krw ||
+          this.configService.get<number>('INITIAL_CAPITAL_KRW');
+        const investmentPercentage =
+          this.configService.get<number>('INVESTMENT_PERCENTAGE') || 10;
+        investmentKRW = Number(totalCapitalKRW) * (investmentPercentage / 100);
+        this.logger.debug(
+          `[FLOW_MANAGER] 비율 기반 투자금 사용: ${investmentKRW.toLocaleString()} KRW (${investmentPercentage}%)`,
+        );
+      }
+
       const rate = this.exchangeService.getUSDTtoKRW();
       if (rate === 0) {
         this.logger.warn('Rate is 0, skipping opportunity check.');
@@ -281,7 +298,6 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
       const investmentUSDT = investmentKRW / rate;
 
       // --- 2. '전문가'에게 검증된 기회인지 문의 ---
-      // 이제 calculateSpread는 가격, 거래량, 슬리피지 필터를 모두 통과한 '진짜 기회'만 반환합니다.
       const opportunity = await this.spreadCalculatorService.calculateSpread({
         symbol,
         upbitPrice,
@@ -332,24 +348,45 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
               }
 
               // 2. 포트폴리오를 다시 조회하여 최신 투자금을 계산
-              const latestPortfolio =
-                await this.portfolioLogService.getLatestPortfolio();
-              const totalCapitalKRW =
-                latestPortfolio?.total_balance_krw ||
-                this.configService.get<number>('INITIAL_CAPITAL_KRW');
-              const investmentKRW =
-                Number(totalCapitalKRW) *
-                (this.configService.get<number>('INVESTMENT_PERCENTAGE') /
-                  100 || 0.1);
-              const rate = this.exchangeService.getUSDTtoKRW();
-              if (rate === 0) {
+              const investmentStrategyFinal =
+                this.configService.get<string>('INVESTMENT_STRATEGY') ||
+                'FIXED_AMOUNT';
+              let investmentKRWFinal: number;
+
+              if (investmentStrategyFinal === 'FIXED_AMOUNT') {
+                // 세션당 고정 금액 사용
+                investmentKRWFinal =
+                  this.configService.get<number>(
+                    'SESSION_INVESTMENT_AMOUNT_KRW',
+                  ) || 100000;
+                this.logger.debug(
+                  `[FLOW_MANAGER] 최종 검증 - 세션당 고정 투자금 사용: ${investmentKRWFinal.toLocaleString()} KRW`,
+                );
+              } else {
+                // 기존 비율 기반 투자
+                const latestPortfolio =
+                  await this.portfolioLogService.getLatestPortfolio();
+                const totalCapitalKRW =
+                  latestPortfolio?.total_balance_krw ||
+                  this.configService.get<number>('INITIAL_CAPITAL_KRW');
+                const investmentPercentage =
+                  this.configService.get<number>('INVESTMENT_PERCENTAGE') || 10;
+                investmentKRWFinal =
+                  Number(totalCapitalKRW) * (investmentPercentage / 100);
+                this.logger.debug(
+                  `[FLOW_MANAGER] 최종 검증 - 비율 기반 투자금 사용: ${investmentKRWFinal.toLocaleString()} KRW (${investmentPercentage}%)`,
+                );
+              }
+
+              const rateFinal = this.exchangeService.getUSDTtoKRW();
+              if (rateFinal === 0) {
                 this.logger.warn(
                   '[FINAL_CHECK_FAIL] 환율 정보를 사용할 수 없어 최종 검증을 건너뜁니다.',
                 );
                 this.cycleStateService.resetCycleState();
                 return;
               }
-              const investmentUSDT = investmentKRW / rate;
+              const investmentUSDTFinal = investmentKRWFinal / rateFinal;
 
               // 3. 최신 데이터로 최종 기회 검증
               const verifiedOpportunity =
@@ -357,7 +394,7 @@ export class ArbitrageFlowManagerService implements OnModuleInit {
                   symbol: finalOpportunityCandidate.symbol,
                   upbitPrice: liveUpbitPrice,
                   binancePrice: liveBinancePrice,
-                  investmentUSDT: investmentUSDT,
+                  investmentUSDT: investmentUSDTFinal,
                 });
 
               // 4. 최종 검증에서 기회가 유효하지 않다고 판단되면 (프리미엄 변동 등), 사이클을 리셋하고 종료

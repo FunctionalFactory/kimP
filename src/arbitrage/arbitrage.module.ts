@@ -70,6 +70,7 @@ import { WithdrawalConstraintService } from 'src/common/withdrawal-constraint.se
     ExchangeService,
     DepositMonitorService,
     WithdrawalConstraintService,
+    PortfolioLogService,
   ],
 })
 export class ArbitrageModule {}

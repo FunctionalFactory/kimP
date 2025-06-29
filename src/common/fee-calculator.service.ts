@@ -15,7 +15,6 @@ interface FeeResult {
   totalFee: number;
   netProfit: number;
   netProfitPercent: number;
-
   binanceSpotBuyFeeKrw?: number;
   binanceSpotSellFeeKrw?: number;
   upbitBuyFeeKrw?: number;

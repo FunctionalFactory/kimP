@@ -13,6 +13,8 @@ import { BinanceModule } from './binance/binance.module';
 import { SimulationModule } from './common/simulation.module';
 import { AppController } from './app.controller'; // ⭐️ AppController import 확인
 import { AppService } from './app.service'; // ⭐️ AppService import 확인
+import { CommonModule } from './common/common.module';
+import { SessionModule } from './session/session.module';
 
 @Module({
   imports: [
@@ -37,6 +39,9 @@ import { AppService } from './app.service'; // ⭐️ AppService import 확인
     UpbitModule,
     BinanceModule,
     SimulationModule,
+    SessionModule,
+    CommonModule,
+    SessionModule,
   ],
   controllers: [AppController], // ⭐️ AppController가 등록되어 있는지 확인
   providers: [AppService], // ⭐️ AppService가 등록되어 있는지 확인

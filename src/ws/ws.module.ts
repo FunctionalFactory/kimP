@@ -3,11 +3,13 @@ import { Module } from '@nestjs/common';
 import { WsService } from './ws.service';
 import { MarketDataModule } from '../marketdata/marketdata.module'; // PriceFeedService 제공
 import { ArbitrageModule } from '../arbitrage/arbitrage.module'; // ArbitrageFlowManagerService 제공
+import { SessionModule } from '../session/session.module'; // SessionManagerService 제공
 
 @Module({
   imports: [
     MarketDataModule, // PriceFeedService를 WsService에 주입하기 위해
     ArbitrageModule, // ArbitrageFlowManagerService를 WsService에 주입하기 위해
+    SessionModule, // SessionManagerService를 WsService에 주입하기 위해
   ],
   providers: [
     WsService,

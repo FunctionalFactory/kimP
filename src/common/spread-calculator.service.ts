@@ -21,16 +21,10 @@ export class SpreadCalculatorService {
     private readonly configService: ConfigService,
     private readonly priceFeedService: PriceFeedService,
   ) {
-    // ⭐️ 설정값을 constructor에서 초기화합니다.
     this.MINIMUM_VOLUME_KRW =
-      this.configService.get<number>('MINIMUM_VOLUME_KRW') || 5000000000; // 50억
-
-    this.logger.log(
-      `[초기화] SpreadCalculatorService 초기화 완료. 최소 거래대금 기준: ${(this.MINIMUM_VOLUME_KRW / 100000000).toFixed(2)}억 KRW`,
-    );
-
+      this.configService.get<number>('MINIMUM_VOLUME_KRW') || 5000000000;
     this.MIN_PROFIT_AFTER_SLIPPAGE =
-      this.configService.get<number>('MIN_PROFIT_AFTER_SLIPPAGE') || 0.2; // 슬리피지 고려 후 최소 수익률 0.2%
+      this.configService.get<number>('MIN_PROFIT_AFTER_SLIPPAGE') || 0.2;
   }
 
   // ⭐️ 메소드 시그니처를 수정하여 실제 투자금을 받도록 합니다.

@@ -134,19 +134,41 @@ export class HighPremiumProcessorService {
       );
       return { success: false, nextStep: 'failed' };
     }
-    const strategy = this.configService.get<string>('INVESTMENT_STRATEGY');
-    const percentage = this.configService.get<number>('INVESTMENT_PERCENTAGE');
+
+    // 세션당 고정 투자금 설정
+    const investmentStrategy =
+      this.configService.get<string>('INVESTMENT_STRATEGY') || 'FIXED_AMOUNT';
     let highPremiumInvestmentKRW: number;
 
-    if (strategy === 'PERCENTAGE' && percentage > 0 && percentage <= 100) {
-      highPremiumInvestmentKRW = currentTotalKRWCapital * (percentage / 100);
+    if (investmentStrategy === 'FIXED_AMOUNT') {
+      // 세션당 고정 금액 사용
+      highPremiumInvestmentKRW =
+        this.configService.get<number>('SESSION_INVESTMENT_AMOUNT_KRW') ||
+        100000;
       this.logger.log(
-        `[INVESTMENT] PERCENTAGE(${percentage}%) 전략 적용. 투자금: ${highPremiumInvestmentKRW.toFixed(0)} KRW`,
+        `[INVESTMENT] FIXED_AMOUNT 전략 적용. 세션당 투자금: ${highPremiumInvestmentKRW.toLocaleString()} KRW`,
       );
+    } else if (investmentStrategy === 'PERCENTAGE') {
+      // 비율 기반 투자
+      const percentage = this.configService.get<number>(
+        'INVESTMENT_PERCENTAGE',
+      );
+      if (percentage > 0 && percentage <= 100) {
+        highPremiumInvestmentKRW = currentTotalKRWCapital * (percentage / 100);
+        this.logger.log(
+          `[INVESTMENT] PERCENTAGE(${percentage}%) 전략 적용. 투자금: ${highPremiumInvestmentKRW.toLocaleString()} KRW`,
+        );
+      } else {
+        highPremiumInvestmentKRW = currentTotalKRWCapital;
+        this.logger.log(
+          `[INVESTMENT] FULL_CAPITAL 전략 적용. 투자금: ${highPremiumInvestmentKRW.toLocaleString()} KRW`,
+        );
+      }
     } else {
+      // 기본값: 전체 자본
       highPremiumInvestmentKRW = currentTotalKRWCapital;
       this.logger.log(
-        `[INVESTMENT] FULL_CAPITAL 전략 적용. 투자금: ${highPremiumInvestmentKRW.toFixed(0)} KRW`,
+        `[INVESTMENT] 기본 전략 적용. 투자금: ${highPremiumInvestmentKRW.toLocaleString()} KRW`,
       );
     }
 
