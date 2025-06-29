@@ -35,17 +35,6 @@ export class SessionManagerService implements OnModuleInit {
   async handlePriceUpdate(symbol: string): Promise<void> {
     this.logger.debug(`[SESSION_MANAGER] 실시간 가격 업데이트 처리: ${symbol}`);
 
-    // 자금 검증 수행
-    const isFundSufficient =
-      await this.sessionFundValidationService.validateSessionFunds();
-
-    if (!isFundSufficient) {
-      this.logger.warn(
-        `[SESSION_MANAGER] 자금 부족으로 실시간 세션 생성 차단: ${symbol}`,
-      );
-      return; // 자금이 부족하면 세션 생성하지 않음
-    }
-
     // 실시간 고프리미엄 기회 확인
     const opportunity = await this.checkHighPremiumOpportunity(symbol);
 
@@ -68,15 +57,52 @@ export class SessionManagerService implements OnModuleInit {
       } else {
         // 새 세션 생성
         const session = await this.createHighPremiumSession(opportunity);
-        this.logger.log(
-          `[SESSION_MANAGER] 실시간 기회 발견으로 새 세션 생성: ${session.id} - ${opportunity.symbol}`,
-        );
+        if (session) {
+          this.logger.log(
+            `[SESSION_MANAGER] 실시간 기회 발견으로 새 세션 생성: ${session.id} - ${opportunity.symbol}`,
+          );
+        } else {
+          this.logger.debug(
+            `[SESSION_MANAGER] 자금 부족으로 세션 생성 건너뜀: ${opportunity.symbol}`,
+          );
+        }
       }
     }
   }
 
   // 고프리미엄 기회 발견 시 새 세션 생성
   async createHighPremiumSession(opportunityData: any): Promise<ISession> {
+    this.logger.log(
+      `[SESSION_MANAGER] 고프리미엄 세션 생성 시작: ${opportunityData.symbol}`,
+    );
+
+    const latestValidation =
+      await this.sessionFundValidationService.getLatestValidationResult();
+
+    let isFundSufficient = false;
+
+    if (latestValidation && latestValidation.isFundSufficient) {
+      // DB에 충분한 자금이 있다고 기록되어 있으면 통과
+      isFundSufficient = true;
+      this.logger.debug(
+        `[SESSION_MANAGER] ✅ DB 기반 자금 검증 통과 - 실제 잔고: ${latestValidation.actualBinanceBalanceKrw.toLocaleString()} KRW`,
+      );
+    } else {
+      // DB에 기록이 없거나 자금이 부족하면 실제 검증 수행
+      this.logger.log(
+        `[SESSION_MANAGER] DB에 유효한 자금 검증 결과 없음, 실제 검증 수행`,
+      );
+      isFundSufficient =
+        await this.sessionFundValidationService.validateSessionFunds();
+    }
+
+    if (!isFundSufficient) {
+      this.logger.warn(
+        `[SESSION_MANAGER] ❌ 자금 부족으로 세션 생성 실패: ${opportunityData.symbol}`,
+      );
+      return null;
+    }
+
     const session = this.sessionStateService.createSession();
 
     // 세션에 고프리미엄 데이터 설정
@@ -115,14 +141,6 @@ export class SessionManagerService implements OnModuleInit {
       return;
     }
 
-    const isFundSufficient =
-      await this.sessionFundValidationService.validateSessionFunds();
-
-    if (!isFundSufficient) {
-      this.logger.warn(`[SESSION_MANAGER] 자금 부족으로 주기적 세션 생성 차단`);
-      return; // 자금이 부족하면 새 세션 생성하지 않음
-    }
-
     // IDLE 세션이 없으면 새 세션 생성
     const watchedSymbols = this.priceFeedService.getWatchedSymbols();
 
@@ -133,10 +151,16 @@ export class SessionManagerService implements OnModuleInit {
 
       if (opportunity) {
         const session = await this.createHighPremiumSession(opportunity);
-        this.logger.log(
-          `[SESSION_MANAGER] 고프리미엄 기회 발견으로 새 세션 생성: ${session.id} - ${opportunity.symbol}`,
-        );
-        break; // 하나의 기회만 처리
+        if (session) {
+          this.logger.log(
+            `[SESSION_MANAGER] 고프리미엄 기회 발견으로 새 세션 생성: ${session.id} - ${opportunity.symbol}`,
+          );
+          break; // 하나의 기회만 처리
+        } else {
+          this.logger.debug(
+            `[SESSION_MANAGER] 자금 부족으로 세션 생성 건너뜀: ${opportunity.symbol}`,
+          );
+        }
       }
     }
   }

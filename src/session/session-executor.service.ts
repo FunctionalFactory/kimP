@@ -13,6 +13,7 @@ import { SpreadCalculatorService } from '../common/spread-calculator.service';
 import { PortfolioLogService } from '../db/portfolio-log.service';
 import { ExchangeService } from '../common/exchange.service';
 import { ConfigService } from '@nestjs/config';
+import { SessionFundValidationService } from 'src/db/session-fund-validation.service';
 
 @Injectable()
 export class SessionExecutorService {
@@ -31,6 +32,7 @@ export class SessionExecutorService {
     private readonly portfolioLogService: PortfolioLogService,
     private readonly exchangeService: ExchangeService,
     private readonly configService: ConfigService,
+    private readonly sessionFundValidationService: SessionFundValidationService,
   ) {}
 
   async processNextSession(): Promise<void> {
@@ -169,6 +171,12 @@ export class SessionExecutorService {
       const success = result.success;
       session.status = success ? SessionStatus.COMPLETED : SessionStatus.FAILED;
       this.sessionStateService.updateSessionStatus(session.id, session.status);
+
+      // �� 세션 완료 시 자금 상태 업데이트
+      if (success) {
+        await this.sessionFundValidationService.validateSessionFunds();
+        this.logger.log(`[EXECUTOR] 세션 완료로 자금 상태 업데이트 완료`);
+      }
     } else {
       this.logger.debug(`[EXECUTOR] 저프리미엄 처리 결과가 없습니다.`);
     }
